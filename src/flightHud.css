@@ -1,0 +1,61 @@
+/* Fly sequence HUD (flightHud.js): FLY button, distance counter + region header,
+   skip pops, the reward card and the fade back. Same chunky outlined Fredoka as
+   hud.css; everything sized with clamp()/vmin for phones in both orientations. */
+.fly-ui, .fly-ui * { box-sizing: border-box; font-family: Fredoka, 'Arial Black', sans-serif; font-weight: 700; }
+.fly-ui { position: fixed; inset: 0; pointer-events: none; z-index: 12; color: #fff; user-select: none; -webkit-user-select: none; }
+.fly-ui .stroke { -webkit-text-stroke: 0.16em #3a2410; paint-order: stroke fill; text-shadow: 0 0.07em 0 #3a2410; }
+.fly-ui .stroke-d { -webkit-text-stroke: 0.16em #1b1f2e; paint-order: stroke fill; text-shadow: 0 0.07em 0 #1b1f2e; }
+
+/* --- FLY button --- */
+.fly-btn { position: absolute; left: 50%; bottom: 30%; transform: translateX(-50%) scale(0); pointer-events: auto; cursor: pointer; touch-action: manipulation;
+  display: flex; align-items: center; gap: 0.35em; padding: 0 1.1em 0 0.8em; height: clamp(54px, 10vmin, 92px); min-width: clamp(150px, 26vmin, 260px); justify-content: center;
+  border-radius: 999px; border: 4px solid #1b1f2e; background: linear-gradient(#7dff6a, #2fc23a 55%, #1f9a2c); box-shadow: inset 0 -0.7vmin 0 rgba(0,0,0,0.22), 0 0.8vmin 0 rgba(0,0,0,0.25);
+  font-size: clamp(26px, 5.4vmin, 50px); color: #fff; transition: transform 0.22s cubic-bezier(.2,1.6,.4,1); }
+.fly-btn.on { transform: translateX(-50%) scale(1); animation: flyPulse 1.2s ease-in-out 0.25s infinite; }
+.fly-btn:active { transform: translateX(-50%) scale(0.92); animation: none; }
+.fly-btn svg { width: 1.15em; height: 1.15em; filter: drop-shadow(0 2px 0 rgba(0,0,0,0.3)); }
+.fly-btn .key { font-size: 0.42em; opacity: 0.85; margin-left: 0.2em; }
+body:not(.touch) .fly-btn .key { display: inline; }
+body.touch .fly-btn .key { display: none; }
+@keyframes flyPulse { 50% { transform: translateX(-50%) scale(1.07); } }
+
+/* --- Distance counter + region header (top centre) --- */
+.fly-top { position: absolute; top: calc(clamp(56px, 9vmin, 90px) + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); display: none; flex-direction: column; align-items: center; line-height: 0.95; }
+.fly-top.on { display: flex; }
+.fly-region { display: flex; align-items: center; gap: 0.2em; font-size: clamp(26px, 6.2vmin, 64px); -webkit-text-stroke: 0.14em #ffffff; paint-order: stroke fill; filter: drop-shadow(0 0.05em 0 #1b1f2e) drop-shadow(0 0 0.02em #1b1f2e); opacity: 0; transform: scale(0.6); transition: opacity 0.2s, transform 0.35s cubic-bezier(.2,1.6,.4,1); white-space: nowrap; }
+.fly-region.on { opacity: 1; transform: none; }
+.fly-region canvas { width: 0.95em; height: 0.95em; }
+.fly-dist { font-size: clamp(54px, 13vmin, 140px); letter-spacing: 0.01em; white-space: nowrap; }
+.fly-dist.bump { animation: distBump 0.3s ease-out; }
+@keyframes distBump { 40% { transform: scale(1.12); } }
+.fly-best { font-size: clamp(16px, 3.4vmin, 32px); color: #ffd23a; opacity: 0; margin-top: 0.3em; }
+.fly-best.on { animation: bestIn 1.8s ease forwards; }
+@keyframes bestIn { 0% { opacity: 0; transform: scale(0.5); } 12% { opacity: 1; transform: scale(1.15); } 25% { transform: none; } 80% { opacity: 1; } 100% { opacity: 0; } }
+
+/* --- Skip pop --- */
+.fly-skip { position: absolute; left: 55%; top: 31%; display: flex; align-items: baseline; gap: 0.25em; white-space: nowrap; font-size: clamp(26px, 6.4vmin, 66px); transform: translate(-50%, -50%) rotate(-4deg); pointer-events: none; animation: skipPop 1.15s ease-out forwards; }
+.fly-skip .x { font-size: 0.82em; }
+.fly-skip .sk { color: #3fa2ff; }
+@keyframes skipPop { 0% { opacity: 0; transform: translate(-50%, -50%) rotate(-4deg) scale(0.4); } 14% { opacity: 1; transform: translate(-50%, -50%) rotate(-4deg) scale(1.15); } 26% { transform: translate(-50%, -50%) rotate(-4deg) scale(1); } 75% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -90%) rotate(-4deg) scale(0.95); } }
+
+/* --- Reward card --- */
+.fly-reward { position: absolute; left: 56%; top: 50%; transform: translate(-50%, -50%); display: flex; align-items: center; gap: 0.15em; font-size: clamp(40px, 9vmin, 96px); pointer-events: none; animation: rewardIn 0.55s cubic-bezier(.2,1.6,.4,1); }
+.fly-reward.out { animation: rewardOut 0.35s ease-in forwards; }
+.fly-reward img { width: 1.6em; height: 1.6em; filter: drop-shadow(0 0.06em 0 rgba(0,0,0,0.35)); }
+.fly-reward .mult { position: absolute; right: -0.9em; top: -0.75em; color: #ffc21f; font-size: 0.85em; transform: rotate(-14deg); -webkit-text-stroke: 0.16em #5a2a00; paint-order: stroke fill; text-shadow: 0 0.07em 0 #5a2a00; }
+.fly-reward .sub { position: absolute; left: 50%; top: 105%; transform: translateX(-50%); font-size: 0.32em; white-space: nowrap; color: #ffffff; }
+@keyframes rewardIn { from { opacity: 0; transform: translate(-50%, -50%) scale(0.2) rotate(-10deg); } }
+@keyframes rewardOut { to { opacity: 0; transform: translate(-50%, -70%) scale(0.8); } }
+
+/* --- Fade back to the lobby --- */
+.fly-fade { position: fixed; inset: 0; z-index: 25; background: radial-gradient(circle, #e9fbff, #8fdcff); opacity: 0; pointer-events: none; transition: opacity 0.28s ease; }
+.fly-fade.on { opacity: 1; }
+
+/* While flying the lobby HUD steps aside (the bottom bar stays, like the reference). */
+body.flying .hud-left, body.flying .hud-side, body.flying .hud-right, body.flying .hud-stats, body.flying .trainbtn, body.flying .prompt, body.flying .toasts, body.flying .egg-panel { opacity: 0 !important; pointer-events: none !important; transition: opacity 0.25s; }
+
+@media (orientation: portrait) and (max-width: 640px) {
+  .fly-skip { left: 50%; top: 33%; }
+  .fly-reward { left: 50%; top: 50%; }
+  .fly-reward .mult { right: -0.7em; }
+}

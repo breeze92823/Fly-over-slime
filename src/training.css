@@ -1,0 +1,33 @@
+/* Training feedback (training.js): world-anchored number pops, the level bar
+   glint / level-up flash and the Rebirth button glow. Sized in vmin/clamp so it
+   reads on phones in both orientations. */
+.train-layer { position: fixed; inset: 0; pointer-events: none; z-index: 9; overflow: hidden; contain: strict; }
+.tpop { position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 0.15em; white-space: nowrap; font-family: Fredoka, 'Arial Black', sans-serif; font-weight: 700; line-height: 1; will-change: transform, opacity; color: #6fd8ff; font-size: clamp(22px, 5.2vmin, 54px); -webkit-text-stroke: 0.16em #1b1f2e; paint-order: stroke fill; text-shadow: 0 0.08em 0 #1b1f2e; }
+.tpop img { width: 1.05em; height: 1.05em; filter: drop-shadow(0 0.05em 0 #1b1f2e); transform: rotate(-8deg); }
+.tpop.gold { color: #ffd23a; font-size: clamp(24px, 5.8vmin, 60px); }
+.tpop.level { color: #ffffff; font-size: clamp(28px, 7vmin, 72px); text-shadow: 0 0.08em 0 #1b1f2e, 0 0 0.35em rgba(95, 224, 255, 0.95); }
+.tpop.streak { color: #ff8fd8; font-size: clamp(18px, 4vmin, 40px); }
+.tpop.ready { color: #7dff7d; font-size: clamp(20px, 4.6vmin, 48px); }
+
+/* level bar: a light sweep on every click, a white flash on level up */
+.levelbar .train-glint { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(100deg, transparent 0 35%, rgba(255,255,255,0.75) 47%, rgba(255,255,255,0.0) 60%); transform: translateX(-110%); opacity: 0; }
+.levelbar .train-glint.go { animation: trainGlint 0.38s ease-out; }
+@keyframes trainGlint { 0% { transform: translateX(-110%); opacity: 1; } 100% { transform: translateX(110%); opacity: 0.6; } }
+.levelbar.train-lvl { animation: trainLvl 0.7s ease-out; }
+@keyframes trainLvl {
+  0% { box-shadow: 0 0 0 0 rgba(120, 230, 255, 0.9), inset 0 0 0 999px rgba(255, 255, 255, 0.85); }
+  30% { box-shadow: 0 0 2.5vmin 1vmin rgba(120, 230, 255, 0.7), inset 0 0 0 999px rgba(255, 255, 255, 0.2); }
+  100% { box-shadow: 0 0 0 0 rgba(120, 230, 255, 0), inset 0 0 0 999px rgba(255, 255, 255, 0); }
+}
+
+/* Rebirth button: pulsing glow while a rebirth is available */
+#hud .mbtn.rebirth.train-ready { animation: trainReady 1.1s ease-in-out infinite; }
+@keyframes trainReady {
+  0%, 100% { box-shadow: inset 0 -0.5vmin 0 rgba(0,0,0,0.18), 0 0 0 0 rgba(125, 255, 125, 0.0); transform: scale(1); }
+  50% { box-shadow: inset 0 -0.5vmin 0 rgba(0,0,0,0.18), 0 0 1.6vmin 0.5vmin rgba(125, 255, 125, 0.85); transform: scale(1.06); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #hud .mbtn.rebirth.train-ready { animation: none; box-shadow: 0 0 1.2vmin 0.4vmin rgba(125, 255, 125, 0.8); }
+  .levelbar .train-glint.go { animation: none; }
+}
