@@ -37,6 +37,7 @@ import {
   addSkill,
   dailyClaimable,
   petLook,
+  levelInfo,
   titleOwned,
   titleById,
   rollDaily,
@@ -137,7 +138,10 @@ export function createGame({ scene, camera, fx, props, hud }) {
   }
   const actions = {
     sessionMinutes,
-    windowOpened: (on) => (windowOpen = on),
+    windowOpened: (on) => {
+      windowOpen = on
+      bloxity.adsScreen(on ? 'panel' : 'gameplay')
+    },
     toggle(key) {
       state[key] = !state[key]
       if (key === 'autoFly' && state.autoFly && !fl.active()) teleportToZone()
@@ -414,6 +418,7 @@ export function createGame({ scene, camera, fx, props, hud }) {
     if (e.code === 'KeyE') {
       if (eggs.near()) return
       if (buyInfo?.onBuy) buyInfo.onBuy()
+      else if (buyInfo?.onAd) buyInfo.onAd()
       else keyTrain = true
     }
   })
@@ -493,7 +498,7 @@ export function createGame({ scene, camera, fx, props, hud }) {
   function refreshPads() {
     for (const pad of props.pads) {
       const sl = SLINGSHOTS[pad.index]
-      pad.setState(state.equippedSling === sl.id ? 'equipped' : state.slingshots.includes(sl.id) ? 'owned' : 'unlocked')
+      pad.setState(state.equippedSling === sl.id ? 'equipped' : state.slingshots.includes(sl.id) ? 'owned' : pad.index > 0 && !state.slingshots.includes(SLINGSHOTS[pad.index - 1].id) ? 'locked' : 'unlocked')
     }
   }
   function refreshTables() {
@@ -526,6 +531,10 @@ export function createGame({ scene, camera, fx, props, hud }) {
           training.equipSling()
           changed()
         }
+      } else if (inside > 0 && !state.slingshots.includes(SLINGSHOTS[inside - 1].id)) {
+        // slingshots unlock in order: the previous one must be owned first
+        hud.toast(`Buy the ${SLINGSHOTS[inside - 1].name} first!`, '#ff6a6a')
+        training.cantAfford()
       } else if (state.wins >= sl.price) {
         state.wins -= sl.price
         state.slingshots.push(sl.id)
@@ -590,6 +599,11 @@ export function createGame({ scene, camera, fx, props, hud }) {
         buyInfo = { key: t.id, title: `${t.mult}x Skill Table`, text: 'Unlock this training table for all worlds.', price: t.price, onBuy: () => buyTable(t) }
       }
     }
+    // Free Rewards Chest + a rewarded ad: double the reward just claimed, or open it while it refills.
+    if (!buyInfo && !nearEgg && chestNear && !adBusy && bloxity.rewardedReady()) {
+      if (chestBonus) buyInfo = { key: 'chest-double', title: 'Free Rewards Chest', text: `Watch a short ad to double it: +${fmt(chestBonus)} Wins`, adText: 'Double Reward', onAd: () => chestAd('double') }
+      else if (Date.now() < state.chestAt) buyInfo = { key: 'chest-open', title: 'Free Rewards Chest', text: 'Watch a short ad to open it right now!', adText: 'Open Now', onAd: () => chestAd('open') }
+    }
     if (buyInfo && !nearEgg) hud.showBuy(buyInfo)
     else hud.showEggPrompt(null)
   }
@@ -601,23 +615,51 @@ export function createGame({ scene, camera, fx, props, hud }) {
     changed()
   }
   let chestNear = false
+  let chestBonus = 0 // Wins the chest just paid: a rewarded ad can double them while the player stays here
+  let adBusy = false // a rewarded ad is playing
+  // Pays the chest (the free one, or the one a rewarded ad opened early) and restarts its cooldown.
+  function claimChest(nowMs) {
+    const w = CHEST.wins * rebirthMult()
+    state.wins += w
+    state.chestAt = nowMs + CHEST.cooldown * 1000
+    state.stats.chests++
+    sfx.gift('trophy')
+    hud.toast(`Free Rewards! +${fmt(w)} Wins`, '#ffd23a')
+    celebrate(['#ffd23a', '#ff3b3b', '#ffffff'])
+    changed()
+    return w
+  }
+  // Rewarded ad at the chest: 'double' = the reward just claimed again, 'open' = open it before it
+  // refills. The reward is granted only when the ad was watched to the end (bloxity.showRewarded).
+  async function chestAd(kind) {
+    if (adBusy) return
+    adBusy = true
+    const ok = await bloxity.showRewarded(kind === 'double' ? 'chest-double' : 'chest-open')
+    adBusy = false
+    if (!ok) return hud.toast('No reward: the ad did not finish', '#ff6a6a')
+    if (kind === 'double') {
+      if (!chestBonus) return
+      state.wins += chestBonus
+      sfx.gift('trophy')
+      hud.toast(`Ad bonus! +${fmt(chestBonus)} Wins`, '#ffd23a')
+      celebrate(['#ffd23a', '#7dff7d', '#ffffff'])
+      chestBonus = 0
+      changed()
+    } else if (Date.now() < state.chestAt) {
+      claimChest(Date.now())
+      chestBonus = 0 // one ad per opening
+    }
+  }
   function checkChest(nowMs) {
     const c = props.chest
     const p = player.position
     const near = Math.hypot(p.x - c.x, p.z - c.z) < 4.2
     const ready = nowMs >= state.chestAt
     if (near && !chestNear) {
-      if (ready) {
-        const w = CHEST.wins * rebirthMult()
-        state.wins += w
-        state.chestAt = nowMs + CHEST.cooldown * 1000
-        state.stats.chests++
-        sfx.gift('trophy')
-        hud.toast(`Free Rewards! +${fmt(w)} Wins`, '#ffd23a')
-        celebrate(['#ffd23a', '#ff3b3b', '#ffffff'])
-        changed()
-      } else hud.toast('Chest refills soon!', '#ffffff')
+      if (ready) chestBonus = claimChest(nowMs)
+      else hud.toast('Chest refills soon!', '#ffffff')
     }
+    if (!near) chestBonus = 0
     chestNear = near
   }
   let portalNear = false
@@ -718,12 +760,45 @@ export function createGame({ scene, camera, fx, props, hud }) {
     return rows.slice(0, 11).map((r) => ({ ...r, value: unitFmt(r.raw) }))
   }
   const hm = (s) => `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`
+  // Real boards from the server (net.js `leaderboard`: the top saved players per stat + this player's
+  // rank), set by setBoards(); until the first one arrives (solo play / no server) the bot rows show.
+  let serverBoards = null
+  function realRows(stat, myValue, unitFmt) {
+    const top = serverBoards.boards?.[stat] ?? []
+    const myRank = serverBoards.ranks?.[stat] ?? null
+    const rows = top.map((r, i) => ({ name: r.name, raw: r.value, value: unitFmt(r.value), color: BOT_COLORS[i % BOT_COLORS.length], me: myRank === i + 1 }))
+    // Not in the top list (or not saved yet): show this player's own row anyway.
+    if (!rows.some((r) => r.me)) rows.push({ name: bloxity.displayName?.() || 'You', raw: myValue, value: unitFmt(myValue), color: '#7dff7d', me: true })
+    return rows.slice(0, 11)
+  }
   function refreshBoards() {
-    const lv = Math.floor(Math.sqrt(state.totalSkill / 0.8))
+    const lv = levelInfo().level
+    if (serverBoards) {
+      props.boards[0].set(realRows('bestSkill', state.bestSkill, fmtShort))
+      props.boards[1].set(realRows('playTime', state.playTime, hm))
+      props.boards[2].set(realRows('level', lv, fmt))
+      props.boards[3].set(realRows('wins', state.wins, fmtShort))
+      return
+    }
     props.boards[0].set(boardRows(state.bestSkill, fmtShort, 8.2e9))
     props.boards[1].set(boardRows(state.playTime, hm, 4.3e5))
     props.boards[2].set(boardRows(lv, fmt, 19091))
     props.boards[3].set(boardRows(state.wins, fmtShort, 6.2e9))
+  }
+  function setBoards(msg) {
+    serverBoards = msg
+    refreshBoards()
+  }
+  // A saved game loaded from the server replaced `state`: rebuild everything derived from it.
+  function resync() {
+    applySettings()
+    rebuildPets()
+    refreshPads()
+    refreshTables()
+    updateNameTag()
+    attachSling()
+    hud.update()
+    hud.refreshWindow()
   }
   function refreshSigns(nowMs) {
     const left = Math.max(0, state.chestAt - nowMs) / 1000
@@ -747,6 +822,7 @@ export function createGame({ scene, camera, fx, props, hud }) {
   // ---------------------------------------------------------------------------
   let secAcc = 1
   let boardAcc = 0
+  let trainingActive = false
   let lastEquipped = null
   function update(dt, t) {
     const now = performance.now()
@@ -764,6 +840,7 @@ export function createGame({ scene, camera, fx, props, hud }) {
 
     // training (not while flying, hatching or in a window)
     const trainingNow = (trainHeld || keyTrain) && !fl.active() && !windowOpen && !eggs.busy()
+    trainingActive = trainingNow
     trainTimer -= dt
     if (trainingNow && trainTimer <= 0) {
       train()
@@ -821,5 +898,5 @@ export function createGame({ scene, camera, fx, props, hud }) {
   updateNameTag()
   bloxity.subscribeAuth?.(() => updateNameTag())
 
-  return { actions, update, afterAnimator, setAvatar, isFlying: () => fl.active(), flight: fl, eggs }
+  return { actions, update, afterAnimator, setAvatar, isFlying: () => fl.active(), isTraining: () => trainingActive, setBoards, resync, flight: fl, eggs }
 }

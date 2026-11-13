@@ -4,6 +4,18 @@
 // Docs: https://docs.bloxity.io/#html5
 import { GAME_SLUG, GAME_TITLE, SETTINGS, DEV_MODE, coerceSetting } from './config.js'
 
+// Biggest party the room can seat (backend ROOM_MAX_CLIENTS is 50; parties are 2..100).
+const MAX_PARTY = 8
+// Hosted leaderboards (Legion.SDK.leaderboard). Ids are permanent and must match the backend's
+// LB_BOARDS (constants.ts), which reports the scores from each signed-in player's save.
+export const LEADERBOARDS = [
+  { id: 'level', label: 'Level', order: 'desc', mode: 'best', format: 'number', reset: 'none' },
+  { id: 'skill', label: 'Best Skill', order: 'desc', mode: 'best', format: 'compact', reset: 'none' },
+  { id: 'wins', label: 'Wins', order: 'desc', mode: 'best', format: 'compact', reset: 'none' },
+  { id: 'distance', label: 'Longest Flight (m)', order: 'desc', mode: 'best', format: 'number', reset: 'none' },
+  { id: 'rebirths', label: 'Rebirths', order: 'desc', mode: 'best', format: 'number', reset: 'none' },
+]
+
 export function sdk() {
   if (DEV_MODE) return null
   return (typeof window !== 'undefined' && window.Legion && window.Legion.SDK) || null
@@ -24,6 +36,9 @@ const proportionListeners = new Set()
 const authListeners = new Set()
 const settingListeners = new Set()
 const respawnListeners = new Set()
+const emoteListeners = new Set()
+const chatListeners = new Set()
+const adBreakListeners = new Set()
 const unsubscribers = []
 
 function emit(listeners, ...args) {
@@ -60,6 +75,22 @@ export function onSetting(fn) {
 export function onRespawnRequest(fn) {
   respawnListeners.add(fn)
   return () => respawnListeners.delete(fn)
+}
+// The portal's emote wheel picked emote `id` (Legion.SDK.player 'play_emote'): fn(id).
+export function onEmote(fn) {
+  emoteListeners.add(fn)
+  return () => emoteListeners.delete(fn)
+}
+// Every Bloxity chat message: fn({ userId, username, text, isLocalPlayer }), `text` already made
+// safe for a bubble (chat.bubbleText: a GIF reads "sent a GIF").
+export function onChat(fn) {
+  chatListeners.add(fn)
+  return () => chatListeners.delete(fn)
+}
+// Ad breaks (Bloxity rule: pause gameplay and mute while one plays): fn(true) at the start, fn(false) after.
+export function onAdBreak(fn) {
+  adBreakListeners.add(fn)
+  return () => adBreakListeners.delete(fn)
 }
 
 // --- Auth ---------------------------------------------------------------
@@ -146,6 +177,51 @@ export function init() {
     SDK.init(onLocalhost ? { gameSlug: GAME_SLUG, portalUrl: 'https://bloxity.io' } : { gameSlug: GAME_SLUG })
     SDK.game.loadingStep(`Loading ${GAME_TITLE}`)
 
+    // Party play (before the first matchmaker request): friends who launch together land in one room.
+    try {
+      SDK.party?.enable?.({ maxPartySize: MAX_PARTY })
+    } catch (err) {
+      console.warn('[bloxity] party.enable failed', err)
+    }
+    // Leaderboards: declared here so the portal shows its trophy button; the game server reports
+    // the scores (backend bloxity.ts) from each player's saved progress.
+    try {
+      SDK.leaderboard?.define?.(LEADERBOARDS)
+    } catch (err) {
+      console.warn('[bloxity] leaderboard.define failed', err)
+    }
+    // Emotes from the portal's emote wheel: main.js plays them on our avatar, net.js relays them.
+    try {
+      SDK.game.registerFeature?.('emotes')
+    } catch {
+      // Older SDK build.
+    }
+    // Ad breaks pause and mute the game. Screens declared, no gameplay banners.
+    try {
+      SDK.ads?.onBreakStart?.(() => emit(adBreakListeners, true))
+      SDK.ads?.onBreakEnd?.(() => emit(adBreakListeners, false))
+      SDK.ads?.declareScreens?.({ menu: {}, results: {}, gameplay: {} })
+    } catch (err) {
+      console.warn('[bloxity] ads setup failed', err)
+    }
+    // Chat: a bubble over whoever said it (main.js / remotePlayers.js).
+    try {
+      const off = SDK.chat?.onMessage?.((m) => {
+        if (!m || typeof m !== 'object') return
+        let text = ''
+        try {
+          text = SDK.chat.bubbleText ? SDK.chat.bubbleText(m) : ''
+        } catch {
+          text = ''
+        }
+        if (!text) text = m.isGif ? 'sent a GIF' : String(m.text ?? '')
+        if (text) emit(chatListeners, { userId: String(m.userId ?? ''), username: String(m.username ?? ''), text, isLocalPlayer: !!m.isLocalPlayer })
+      })
+      if (typeof off === 'function') unsubscribers.push(off)
+    } catch {
+      // No chat in this SDK build.
+    }
+
     for (const key of Object.keys(SETTINGS)) {
       const off = SDK.settings.listen(key, (raw) => {
         const next = coerceSetting(key, raw)
@@ -178,8 +254,9 @@ export function init() {
     }
 
     unsubscribers.push(
-      SDK.player.onEvent((event) => {
+      SDK.player.onEvent((event, data) => {
         if (event === 'respawn_request') emit(respawnListeners)
+        else if (event === 'play_emote' && typeof data === 'string' && data) emit(emoteListeners, data)
       }),
     )
 
@@ -210,6 +287,7 @@ export function notifyFirstFrame() {
   try {
     SDK.game.loadingEnd()
     SDK.game.gameplayStart()
+    SDK.ads?.screen?.('gameplay')
   } catch {
     // Non-fatal.
   }
@@ -369,6 +447,105 @@ function estimatedReservedAreas(w, h) {
     { id: 'toolbar', left: 0, top: 0, width: Math.min(w, w < 480 ? w : 330), height: toolbarHeight },
     { id: 'chat', left: 0, top: toolbarHeight, width: Math.round(chatWidth + 8), height: compact ? 140 : 180 },
   ]
+}
+
+// The player's Bloxity game token: the server verifies it (POST /v1/auth/game-token/verify) and trusts
+// only the account id that comes back, never a client-sent id. '' for a guest / without the SDK.
+export function getToken() {
+  try {
+    return sdk()?.auth?.getToken?.() || ''
+  } catch {
+    return ''
+  }
+}
+
+// Tells the portal friends can join our room (invites / Open Rooms land in it). Once, after a join.
+let friendsFeature = false
+export function registerPlayWithFriends() {
+  if (friendsFeature || !sdk()) return
+  friendsFeature = true
+  try {
+    sdk().game?.registerFeature?.('play_with_friends')
+  } catch {
+    // Ignore.
+  }
+}
+
+// Someone else entered the room (the portal's join feed / chat).
+export function playerJoined(name) {
+  try {
+    if (name) sdk()?.game?.playerJoined?.(name)
+  } catch {
+    // Ignore.
+  }
+}
+
+// Rewarded ads (Legion.SDK.ads): `rewardedReady()` is whether the portal can show one now (kept fresh
+// in the background, so the UI can decide synchronously); `showRewarded(placement)` plays it and
+// resolves true ONLY when the player watched it to the end (status 'completed'), the one case a
+// reward may be granted. Placement names: lowercase letters, digits, hyphens.
+let adReady = false
+async function refreshAdReady() {
+  try {
+    adReady = !!(await sdk()?.ads?.isAvailable?.())
+  } catch {
+    adReady = false
+  }
+}
+export const rewardedReady = () => adReady
+export async function showRewarded(placement) {
+  try {
+    const r = await sdk()?.ads?.showRewarded?.(placement)
+    return r?.status === 'completed'
+  } catch {
+    return false
+  } finally {
+    refreshAdReady()
+  }
+}
+if (typeof window !== 'undefined') {
+  setTimeout(refreshAdReady, 3000)
+  setInterval(refreshAdReady, 30000)
+}
+
+// Which screen the player is on, for the portal's screen ads ('panel' while a menu window is open,
+// 'gameplay' otherwise). A new call replaces the previous one.
+export function adsScreen(type) {
+  try {
+    sdk()?.ads?.screen?.(type)
+  } catch {
+    // Ignore.
+  }
+}
+
+// The Bloxity emote catalogue as Map(id -> clip { len, loop, tracks }), fetched once
+// (GET {apiUrl}/v1/avatar/emotes). Empty without the SDK.
+let emoteCatalog = null
+export function emoteClips() {
+  emoteCatalog ||= (async () => {
+    const out = new Map()
+    try {
+      const api = sdk()?.environment?.()?.apiUrl
+      if (!api) return out
+      const res = await fetch(`${String(api).replace(/\/$/, '')}/v1/avatar/emotes`)
+      const body = res.ok ? await res.json() : null
+      for (const e of body?.emotes ?? []) if (e && typeof e.id === 'string' && e.clip?.tracks) out.set(e.id, e.clip)
+    } catch (err) {
+      console.warn('[bloxity] emote catalogue failed', err)
+      emoteCatalog = null // try again next time
+    }
+    return out
+  })()
+  return emoteCatalog
+}
+
+// Opens the portal's leaderboard panel on board `id` (false when it can't).
+export function openLeaderboard(id = LEADERBOARDS[0].id) {
+  try {
+    return !!sdk()?.leaderboard?.open?.(id)
+  } catch {
+    return false
+  }
 }
 
 export function requestFullscreen(on) {

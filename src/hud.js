@@ -1,7 +1,8 @@
 import './hud.css'
-import { BOOSTS, EGGS, PASSES, RARITY_COLORS, SKILL_PACKS, STAND_PETS } from './config.js'
+import { BOOSTS, EGGS, GEAR, PASSES, RARITY_COLORS, SKILL_PACKS, STAND_PETS } from './config.js'
 import { iconURL, studURL } from './icons.js'
 import { makeWindows, clock, setInvTab } from './windows.js'
+import { gearIcon, gearWindow } from './gear.js'
 import { sfx } from './audio/index.js'
 import { fmtShort, buildEgg, buildSlingshot } from './props.js'
 import { buildPet } from './petModels.js'
@@ -69,8 +70,9 @@ export function createHud(actions) {
   // Day (Daily Rewards) + Time Play (Playtime Rewards) icon buttons beside the menu
   const sideCol = h('div', 'hud-side')
   const sideBtn = {}
-  for (const [id, label, icon] of [['daily', 'Day', 'gift'], ['playtime', 'Time Play', 'alarm']]) {
-    const b = h('button', 'side-btn', `${ico(icon, 160)}<span class="lbl ol">${label}</span><span class="dot ol-thin">!</span>`)
+  for (const [id, label, icon] of [['daily', 'Day', 'gift'], ['playtime', 'Time Play', 'alarm'], ['gear', 'Gear', null]]) {
+    const img = icon ? ico(icon, 160) : `<img src="${gearIcon('shield')}" alt="">`
+    const b = h('button', 'side-btn', `${img}<span class="lbl ol">${label}</span><span class="dot ol-thin">!</span>`)
     b.addEventListener('click', () => openWindow(id))
     sideCol.appendChild(b)
     sideBtn[id] = b
@@ -162,6 +164,7 @@ export function createHud(actions) {
   const NEW = makeWindows({ actions, petThumb, eggThumb, slingThumb })
   const WINDOWS = {
     ...NEW,
+    gear: gearWindow({ toast: (text, color) => toast(text, color) }),
     shop: { title: 'Shop', size: 'lg', render: (api) => renderShop(legacy(api)) },
     log: { title: 'Update Log', size: 'md', render: (api) => renderLog(legacy(api)) },
   }
@@ -309,11 +312,14 @@ export function createHud(actions) {
       <li>Daily Rewards (a limited Galaxy Cannon on day 7) and Playtime Rewards with free eggs and boosts.</li>
       <li>22 Titles with bonuses, 11 Trails, Skill / Win / Luck Boost potions and the Index Luck bonus.</li>
       <li>Trails, passes, skill packs and the Starter Pack: everything is bought with Wins.</li>
+      <li><b>Lane animals!</b> Frogs, Robo-Ducks, Slime Dragons and 18 more try to cut your flight short. Steer to dodge, chain dodges for bonus Wins, grab Mushrooms, Seagulls and Fans for boosts.</li>
+      <li>Bosses: the King Slime Dragon (1,000 m), Mecha-Duck Mk II (2,000 m) and the Sky Whale (2,800 m). Survive them for huge Wins.</li>
+      <li>Flight Gear (the Gear button): Air Dash, Shield Bubble, Slime-Proof Suit, Glide Wings, Anti-Magnet Boots, Quick Escape and Animal Radar, all for Wins.</li>
       <li>Coming next: World 2 (needs 600M Skill).</li></ul>
       <div class="sub">Controls</div><ul class="loglist">
       <li>WASD / joystick to move, Space to jump, Shift to sprint.</li>
       <li>Click or E (desktop) / TRAIN button (touch) to train.</li>
-      <li>While flying: A/D or the joystick steers.</li>
+      <li>While flying: A/D or the joystick steers, Space / DASH dashes (with Air Dash), tap fast to break free when trapped.</li>
       <li>E / F: hatch 1 or 3 eggs when standing at an egg. Esc closes a window.</li></ul>`
   }
 
@@ -340,6 +346,7 @@ export function createHud(actions) {
     if (openId === 'rebirth' && lv.level !== lastLevel) refreshWindow()
     lastLevel = lv.level
     sideBtn.daily.classList.toggle('alert', dailyClaimable().length > 0)
+    sideBtn.gear.classList.toggle('alert', GEAR.some((g) => (g.prices[state.gear?.[g.id] ?? 0] ?? Infinity) <= state.wins))
     document.body.classList.toggle('hide-hud', !!state.settings.hideHud)
     renderBoosts()
   }
@@ -443,6 +450,12 @@ export function createHud(actions) {
     if (info.onBuy) {
       const row = h('div', 'row')
       row.appendChild(button(`Buy<small>${ico('trophy', 48)} ${fmtShort(info.price)} · E</small>`, 'gold', info.onBuy))
+      prompt.appendChild(row)
+    }
+    // A rewarded ad (Free Rewards Chest): { onAd, adText }.
+    if (info.onAd) {
+      const row = h('div', 'row')
+      row.appendChild(button(`Watch Ad<small>▶ ${info.adText} · E</small>`, 'gold', info.onAd))
       prompt.appendChild(row)
     }
   }

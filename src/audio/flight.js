@@ -14,6 +14,7 @@ import { bubble, bubbles, burst, crinkle, env, modal, rnd, route, tone, vary } f
 const GLOCK = [[1, 1, 1.4], [2.756, 0.32, 0.45], [5.404, 0.1, 0.18], [8.933, 0.04, 0.08]]
 const COIN = [[1, 1, 0.5], [1.504, 0.6, 0.36], [2.24, 0.45, 0.26], [2.71, 0.3, 0.18], [3.47, 0.22, 0.12], [4.03, 0.12, 0.08]]
 const TROPHY = [[1, 1, 0.7], [2.05, 0.5, 0.5], [3.1, 0.34, 0.32], [4.33, 0.2, 0.2], [5.6, 0.1, 0.12]]
+const GLASS = [[1, 1, 0.45], [2.32, 0.5, 0.28], [4.25, 0.28, 0.16], [6.63, 0.14, 0.1]]
 const WOOD = [[1, 1, 0.07], [2.57, 0.45, 0.035], [4.2, 0.22, 0.016], [6.1, 0.08, 0.01]]
 const PENTA = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24]
 const semi = (n) => Math.pow(2, n / 12)
@@ -47,6 +48,60 @@ export function flyReady() {
   const t = now()
   bubble({ t, f: 380, d: 0.09, gain: 0.2, rise: 1.4, bus: A.ui })
   glock(t + 0.06, [12, 19], 0.07, 0.06)
+}
+
+// FLY pressed: the slingshot is summoned. A magic swell rising, a shimmer of
+// glass sparkles and a run up the glockenspiel as it spins out of the ground.
+export function summon() {
+  if (!voice(1.2, 3)) return
+  const t = now()
+  burst({ t, noise: 'pink', f: 300, f2: 3200, q: 1.1, a: 0.55, d: 0.12, gain: 0.2 })
+  tone({ t, type: 'triangle', f: 196, f2: 392, glide: 0.6, a: 0.4, d: 0.25, gain: 0.06, lp: 2000 })
+  for (let i = 0; i < Math.round(10 * lite); i++) modal({ t: t + rnd(0, 0.55), f: rnd(2600, 5600), modes: GLASS, gain: 0.025, decay: 0.5, pan: rnd(-0.6, 0.6) })
+  glock(t + 0.12, [0, 4, 7, 12, 16], 0.09, 0.09, 0.35)
+}
+
+// The summoned launcher lands: a heavy wooden thunk (a metal clank for the cannon).
+export function plant(cannon = false) {
+  if (!voice(0.8, 3)) return
+  const t = now()
+  tone({ t, f: 95, f2: 45, d: 0.25, gain: 0.45 })
+  burst({ t, noise: 'brown', type: 'lowpass', f: 600, q: 0.6, a: 0.003, d: 0.22, gain: 0.4, verb: 0.15 })
+  if (cannon) modal({ t, f: 420, modes: COIN, gain: 0.12, beat: 5, strike: 0.3, decay: 1.2 })
+  else modal({ t, f: vary(140, 0.05), modes: WOOD, gain: 0.35, strike: 0.15, decay: 2 })
+  crinkle({ t: t + 0.02, n: 10, dur: 0.25, gain: 0.03, f0: 2500, f1: 7000 })
+  buzz(35)
+}
+
+// Cannon charging for `dur` s: a hum winding up with ratchet clicks.
+export function charge(dur = 1) {
+  if (!voice(dur + 0.3, 3)) return
+  const t = now()
+  tone({ t, type: 'sawtooth', f: 60, f2: 240, glide: dur, a: dur * 0.5, hold: dur * 0.45, d: 0.1, gain: 0.06, lp: 900 })
+  tone({ t, f: 120, f2: 520, glide: dur, a: dur * 0.6, hold: dur * 0.35, d: 0.1, gain: 0.04 })
+  const n = Math.round(9 * lite)
+  for (let i = 0; i < n; i++) modal({ t: t + Math.pow(i / n, 0.85) * dur, f: 900 + i * 90, modes: WOOD, gain: 0.12, strike: 0.2 })
+}
+
+// Cannon fires: a deep boom, a crack, smoke rushing out, a bright chord.
+export function boom(k = 0.5) {
+  if (!voice(2, 5)) return
+  const t = now()
+  burst({ t, type: 'highpass', f: 1800, q: 0.6, a: 0.0006, d: 0.04, gain: 0.5 })
+  tone({ t, f: 58, f2: 26, d: 0.8, gain: 0.7 })
+  burst({ t, noise: 'brown', type: 'lowpass', f: 700, f2: 180, q: 0.6, a: 0.003, d: 0.9, gain: 0.55, verb: 0.35 })
+  burst({ t: t + 0.02, noise: 'pink', f: 500, f2: 4200 + 2000 * k, q: 0.7, a: 0.05, d: 0.8 + 0.5 * k, gain: 0.28 })
+  glock(t + 0.1, [0, 7, 12, 19], 0.05, 0.07)
+  buzz([60, 30, 80])
+}
+
+// The launcher vanishes: a soft cartoon poof and a sparkle.
+export function poof() {
+  if (!voice(0.7, 2)) return
+  const t = now()
+  burst({ t, noise: 'pink', f: 900, f2: 300, q: 0.7, a: 0.01, d: 0.3, gain: 0.25 })
+  bubble({ t, f: 520, d: 0.08, gain: 0.18, rise: -0.5 })
+  modal({ t: t + 0.05, f: C6 * semi(19), modes: GLOCK, gain: 0.05, verb: 0.4 })
 }
 
 // Jumping into the pouch: a lift of air, then the body landing in thick rubber.

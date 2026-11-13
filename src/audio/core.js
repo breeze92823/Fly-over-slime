@@ -43,7 +43,8 @@ try {
 } catch {
   // Storage blocked: unmuted.
 }
-const level = () => (muted ? 0 : volume * volume) // perceptual: the slider feels even
+let adMuted = false // an ad break is playing (never stored)
+const level = () => (muted || adMuted ? 0 : volume * volume) // perceptual: the slider feels even
 function applyLevel(t = 0.05) {
   if (A.master) A.master.gain.setTargetAtTime(level(), A.ctx.currentTime, t)
 }
@@ -52,6 +53,10 @@ export function setVolume(v) {
   applyLevel()
 }
 export const isMuted = () => muted
+export function setAdMuted(on) {
+  adMuted = !!on
+  applyLevel()
+}
 export function setMuted(on) {
   muted = !!on
   try {
@@ -74,9 +79,14 @@ export function setSfxEnabled(on) {
   fade(A.sfx.gain, sfxOn ? AUDIO.buses.sfx : 0)
   fade(A.verb.gain, sfxOn ? AUDIO.reverb.send : 0)
 }
+let musicLevel = 1 // the portal's music_volume slider, 0..1
 export function setMusicEnabled(on) {
   musicOn = !!on
-  if (A.music) fade(A.music.gain, musicOn ? AUDIO.buses.music : 0)
+  if (A.music) fade(A.music.gain, musicOn ? AUDIO.buses.music * musicLevel : 0)
+}
+export function setMusicLevel(v) {
+  musicLevel = Math.max(0, Math.min(1, Number(v) || 0))
+  setMusicEnabled(musicOn)
 }
 export const musicEnabled = () => musicOn
 
@@ -196,7 +206,7 @@ function buildGraph() {
   A.world = bus(ducked ? AUDIO.duck : 1)
   A.amb = bus(AUDIO.buses.amb, A.world)
   A.engine = bus(AUDIO.buses.engine, A.world)
-  A.music = bus(musicOn ? AUDIO.buses.music : 0, A.world)
+  A.music = bus(musicOn ? AUDIO.buses.music * musicLevel : 0, A.world)
   const conv = ctx.createConvolver()
   conv.buffer = makeImpulse(ctx)
   A.verb = ctx.createGain()

@@ -49,6 +49,12 @@ export function createTrail(scene) {
     stop() {
       active = false
     },
+    // Remove the ribbon from the scene (a remote player left).
+    dispose() {
+      scene.remove(mesh)
+      geo.dispose()
+      mat.dispose()
+    },
     update(dt, p, width = 1.1, t = 0) {
       if (!mesh.visible) return
       acc += dt

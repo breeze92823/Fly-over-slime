@@ -56,7 +56,8 @@ const DEFAULT = () => ({
   boostLeft: { skill: 0, wins: 0, luck: 0 }, // s of active boost left
   daily: { unlocked: 0, last: -1, claimed: [] }, // days unlocked this cycle, local day index of the last unlock
   title: 'newbie',
-  stats: { hatched: 0, mythics: 0, longFlights: 0, dailyClaims: 0, chests: 0, spent: 0 },
+  gear: {}, // Flight Gear levels by GEAR id (config.js)
+  stats: { hatched: 0, mythics: 0, longFlights: 0, dailyClaims: 0, chests: 0, spent: 0, dodges: 0, closeCalls: 0, laneHits: 0, boosts: 0 },
   settings: Object.fromEntries(GAME_SETTINGS.map((s) => [s.key, s.def])),
 })
 
@@ -76,7 +77,7 @@ function load() {
 function migrate(saved) {
   const d = DEFAULT()
   const s = { ...d, ...saved, claimedGifts: [] }
-  for (const k of ['potions', 'boostLeft', 'daily', 'stats', 'settings']) s[k] = { ...d[k], ...(saved[k] ?? {}) }
+  for (const k of ['potions', 'boostLeft', 'daily', 'stats', 'settings', 'gear']) s[k] = { ...d[k], ...(saved[k] ?? {}) }
   s.pets = (s.pets ?? []).filter((p) => petById(p.id)).map((p) => ({ ...p, tier: p.tier ?? '' }))
   s.trails = (s.trails ?? []).filter((id) => TRAILS.some((t) => t.id === id))
   if (!s.trails.includes(s.trail)) s.trail = ''
@@ -99,6 +100,37 @@ export function changed() {
   for (const fn of listeners) fn(state)
   clearTimeout(saveTimer)
   saveTimer = setTimeout(save, 400)
+}
+// The server's saved progress (net.js `progress`) over this one, in place so every module's
+// `state` reference stays valid. Session-only fields (claimedGifts) are kept.
+export function hydrate(doc) {
+  const next = migrate(doc ?? {})
+  next.claimedGifts = state.claimedGifts
+  Object.assign(state, next)
+  save()
+  for (const fn of listeners) fn(state)
+}
+// What net.js sends as `saveProgress` (backend sanitize.ts): the whole state plus the Level.
+export function snapshot() {
+  const { claimedGifts, ...rest } = state
+  return { ...rest, level: levelInfo().level }
+}
+// Which account the local copy belongs to ('' = a guest / nobody), so one account's cache is
+// never uploaded as another's first save.
+const OWNER_KEY = `${SAVE_KEY}-owner`
+export const getOwner = () => {
+  try {
+    return localStorage.getItem(OWNER_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+export const setOwner = (id) => {
+  try {
+    localStorage.setItem(OWNER_KEY, id)
+  } catch {
+    /* ignore */
+  }
 }
 export function resetSave() {
   Object.assign(state, DEFAULT())
@@ -171,6 +203,8 @@ export function petBoost() {
   for (const p of state.pets) if (p.equipped) b += petPower(p)
   return 1 + b
 }
+// Flight Gear (config GEAR, the Gear window): level 0 = not bought.
+export const gearLevel = (id) => Math.max(0, Math.floor(state.gear?.[id] ?? 0))
 export const trailMult = () => trailById(state.trail)?.mult ?? 1
 export const winsMult = () => trailMult() * (hasPass('wins2x') ? 2 : 1) * (1 + titleBonus('wins')) * boostMult('wins')
 export const indexLuck = () => state.indexClaims * INDEX_LUCK.pct

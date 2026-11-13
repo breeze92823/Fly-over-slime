@@ -179,6 +179,8 @@ export const SETTINGS = {
   camera_sensitivity: { def: '1', type: 'number', min: 0.1, max: 5 },
   show_fps: { def: 'false', type: 'bool' },
   fullscreen: { def: 'false', type: 'bool' },
+  master_volume: { def: '80', type: 'number', min: 0, max: 100 },
+  music_volume: { def: '80', type: 'number', min: 0, max: 100 },
 }
 
 // The base rig, measured from player.glb: origin at the feet, 6.4 units tall at bind pose.
@@ -299,6 +301,22 @@ export function coerceSetting(key, raw) {
 // =============================================================================
 export const SAVE_KEY = 'fly-over-slime-save-v1'
 
+// Game server (../Fly-over-slime-backend, Colyseus room "world"): progress save + other players.
+// `npm run dev` defaults to ws://localhost:2567; `npm run build` uses _MAIN. Leave a URL empty to let
+// the Bloxity SDK resolve that channel's endpoint at runtime; with neither the game runs solo (net.js).
+const SERVER_URL_DEV = import.meta.env.VITE_SERVER_URL_DEV || (import.meta.env.DEV ? 'ws://localhost:2567' : '')
+const SERVER_URL_MAIN = import.meta.env.VITE_SERVER_URL_MAIN || ''
+export const SERVER_URL = import.meta.env.MODE === 'production' ? SERVER_URL_MAIN : SERVER_URL_DEV
+export const NET = {
+  saveDebounce: 3, // s of quiet after a change before saving
+  saveMaxWait: 10, // s: a stream of changes (training clicks) still saves this often
+  saveEvery: 20, // s: periodic save, so playtime and boost timers persist too
+  retry: 8, // s between connection attempts while the server is unreachable
+  poseEvery: 0.1, // s between `pose` messages
+  snap: 40, // m: a remote that jumps further than this is teleported, not eased
+  follow: 12, // 1/s: how fast a remote eases toward its (extrapolated) pose
+}
+
 // Slingshots on the west terrace. skill = Skill gained per training click.
 // row 0 = lower front row (south -> north), row 1 = upper back row.
 export const SLINGSHOTS = [
@@ -373,8 +391,109 @@ export const FLIGHT = {
   rewardTime: 1.7, // s the reward shows before going back
   milestone: 100, // m between counter chimes
 }
-// The giant slingshots standing on the Flying Zone (x positions, z, size).
-export const LAUNCHERS = { xs: [-18, -6, 6, 18], z: -43.2, pouchY: 3.25, armSpread: 1.85, height: 5.6 }
+// The launcher (launcher.js): pressing FLY summons a giant copy of the player's equipped
+// slingshot (or blaster) in front of them, which they shoot from, then it vanishes.
+// scale = x the hand-held model; summon/linger/vanish in s; ahead = m in front of the player.
+export const LAUNCHERS = { scale: 3.4, cannonScale: 3.3, summon: 0.75, linger: 1.3, vanish: 0.4, ahead: 3.4 }
+
+// --- Lane animals (lane/hazards.js, models in lane/animals*.js, sounds in audio/lane.js) ---
+// While flying, animals appear ahead and try to cut the flight short; the player
+// dodges by steering (A/D, joystick) and the Air Dash. Easy at first, then the
+// encounter rate DOUBLES every `doubleEvery` metres, warnings get shorter and hits
+// cost more, while far flights also pay much more (LANE.wins) to keep it worth it.
+//   kind  grab    caught for `hold` s, then dropped (Slime-Proof Suit softens it)
+//         knock   knocked down / back            carry  dragged back `carry` m
+//         trap    stuck until you tap free       freeze no steering for `freeze` s
+//         ink     screen splattered              clip   glide clipped (knock)
+//         drain   bee swarm area                 sticky snail trail (on the slime)
+//         pull    magnet drags you toward it     wall   lane blocked except a gap
+//   zone  low = only where the flight passes within `reach` m of the slime; any = anywhere
+//   r = hit radius (m), penalty = share of the REMAINING distance lost, weight = spawn odds
+export const LANE = {
+  tutorialFlights: 2, // the first flights are animal free
+  grace: 40, // m from the zone with no animals
+  startDelay: 0.7, // s after release before the first animal
+  rate: 0.3, // encounters per second at the zone line ...
+  doubleEvery: 650, // ... doubling every this many metres
+  maxRate: 3, // per s cap
+  tell: [1.6, 0.75], // s of warning: near -> far (lerp over tellAt metres), + Animal Radar
+  tellAt: 2600,
+  penaltyAt: 1800, // penalty x(1 + d / penaltyAt) ...
+  penaltyMax: 0.8, // ... capped
+  nearMiss: 3, // m outside the hit radius that still counts as a CLOSE CALL
+  minAfter: 10, // m the flight must go past an encounter for it to spawn
+  maxAlive: 9,
+  aimJitter: 4, // m an animal aims off the player's line
+  hitStop: 0.09, // s of slow motion on a hit
+  slowMo: 0.18, // time scale during the hit stop
+  dash: { dist: 9, time: 0.18 }, // Air Dash
+  trap: { taps: 9, timeout: 2.6, perSecond: 0.1 }, // tap-free traps: taps (-Quick Escape), extra penalty per s
+  pullRange: 70, // m ahead where a Magnet Mole starts pulling
+  helperEvery: [4.5, 8], // s between friendly helpers
+  boostFrac: 0.12, // a helper adds this x the planned flight (+ boostMin m)
+  boostMin: 12,
+  // Wins: distance Wins x(1 + (d / at)^exp): long flights pay far more per metre
+  wins: { at: 1000, exp: 1.3 },
+  dodgeBonus: 0.03, // +3% Wins per dodge this flight
+  nearBonus: 0.06, // +6% per close call
+  bonusMax: 1.5, // dodge bonus cap (x2.5)
+  beginnerFlights: 10, // the first flights pay x beginnerMult
+  beginnerMult: 2,
+  streakEvery: 5, // combo fanfare every N dodges in a row
+}
+export const LANE_ANIMALS = [
+  { id: 'frog', name: 'Sticky Frog', at: 0, kind: 'grab', zone: 'low', reach: 16, r: 3, penalty: 0.15, weight: 3, attack: 0.35, hold: 0.7, color: '#7dff5a' },
+  { id: 'duck', name: 'Robo-Duck', at: 0, kind: 'knock', zone: 'any', r: 3.4, penalty: 0.18, weight: 3, attack: 0.55, boots: true, color: '#ffd23a' },
+  { id: 'dragon', name: 'Slime Dragon', at: 90, kind: 'grab', zone: 'low', reach: 22, r: 4, penalty: 0.25, weight: 2, attack: 0.6, hold: 1, color: '#3fe23a' },
+  { id: 'penguin', name: 'Freeze Penguin', at: 200, kind: 'freeze', zone: 'low', reach: 30, r: 3.2, penalty: 0.12, weight: 2, attack: 0.3, freeze: 1.5, color: '#9fe3ff' },
+  { id: 'owl', name: 'Dive-Bomb Owl', at: 200, kind: 'knock', zone: 'any', r: 3.6, penalty: 0.22, weight: 2, attack: 0.6, boots: true, color: '#d8a46a' },
+  { id: 'goat', name: 'Ram Goat', at: 200, kind: 'knock', zone: 'low', reach: 14, r: 3.4, penalty: 0.2, weight: 2, attack: 0.55, color: '#ffffff' },
+  { id: 'bat', name: 'Bat Squad', at: 450, kind: 'knock', zone: 'any', r: 2.2, penalty: 0.07, weight: 2, attack: 0.4, group: 3, gap: 0.32, color: '#b45cff' },
+  { id: 'chameleon', name: 'Chameleon', at: 450, kind: 'grab', zone: 'low', reach: 16, r: 3, penalty: 0.2, weight: 1.5, attack: 0.35, hold: 0.7, stealth: true, color: '#22d3a8' },
+  { id: 'octopus', name: 'Slime Octopus', at: 750, kind: 'grab', wall: 12, zone: 'any', penalty: 0.28, weight: 1.5, attack: 0.45, hold: 1, color: '#ff6ad5' },
+  { id: 'croc', name: 'Snap-Croc', at: 750, kind: 'grab', zone: 'low', reach: 8, r: 3, penalty: 0.2, weight: 1.5, attack: 0.3, hold: 0.7, group: 3, gap: 0.42, color: '#3fbf6a' },
+  { id: 'puffer', name: 'Bubble Puffer', at: 750, kind: 'trap', zone: 'any', r: 3.4, penalty: 0.1, weight: 1.5, attack: 0.5, color: '#8fe3ff' },
+  { id: 'squid', name: 'Ink Squid', at: 750, kind: 'ink', zone: 'any', r: 3.4, penalty: 0.08, weight: 1.5, attack: 0.45, ink: 2.4, color: '#5a4a8a' },
+  { id: 'crab', name: 'Claw Crab', at: 750, kind: 'clip', zone: 'low', reach: 12, r: 3.2, penalty: 0.22, weight: 1.5, attack: 0.35, color: '#ff4a3a' },
+  { id: 'hippo', name: 'Belly-Flop Hippo', at: 1150, kind: 'knock', wall: 12, zone: 'low', reach: 20, penalty: 0.22, weight: 1.5, attack: 0.5, color: '#b08cff' },
+  { id: 'turtle', name: 'Spinning Turtle', at: 1150, kind: 'knock', zone: 'low', reach: 5, r: 3, penalty: 0.18, weight: 1.5, attack: 0.7, color: '#5dbb3a' },
+  { id: 'mole', name: 'Magnet Mole', at: 1150, kind: 'pull', zone: 'low', reach: 30, r: 3.6, penalty: 0.25, weight: 1.5, attack: 0.35, pull: 10, color: '#ff4a4a' },
+  { id: 'bees', name: 'Bee Swarm', at: 1150, kind: 'drain', zone: 'any', r: 7, length: 40, penalty: 0.5, weight: 1.5, attack: 0.4, color: '#ffe03a' },
+  { id: 'spider', name: 'Web Spider', at: 1650, kind: 'trap', wall: 11, zone: 'any', penalty: 0.12, weight: 1.5, attack: 0.35, color: '#e8e8ff' },
+  { id: 'snail', name: 'Mega Snail', at: 1650, kind: 'sticky', zone: 'low', reach: 3, r: 4, length: 60, penalty: 0.3, weight: 1.2, attack: 0.5, color: '#ff8fd0' },
+  { id: 'gorilla', name: 'Clap Gorilla', at: 1650, kind: 'knock', wall: 10, zone: 'any', penalty: 0.32, weight: 1.2, attack: 0.45, color: '#5a5a6a' },
+  { id: 'pelican', name: 'Pelican Scooper', at: 2250, kind: 'carry', zone: 'any', r: 3.6, penalty: 0.1, weight: 2, attack: 0.55, hold: 1.2, carry: 60, color: '#ff9a3a' },
+]
+// Boss shots and their attack stats (spawned by LANE_BOSSES, never at random).
+export const LANE_SHOTS = {
+  slimeball: { id: 'slimeball', name: 'Slime Ball', kind: 'knock', zone: 'any', r: 3.4, penalty: 0.16, attack: 0.5, color: '#3fe23a' },
+  missile: { id: 'missile', name: 'Missile', kind: 'knock', zone: 'any', r: 3.6, penalty: 0.18, attack: 0.4, color: '#ff6a3a' },
+  tailslam: { id: 'tailslam', name: 'Tail Slam', kind: 'knock', wall: 12, zone: 'any', penalty: 0.22, attack: 0.5, color: '#5a8cff' },
+  geyser: { id: 'geyser', name: 'Geyser', helper: true, zone: 'any', r: 4, attack: 0.5, apex: 16, color: '#7ff6ff' },
+}
+// Friendly helpers: fly through them for a boost (+boostFrac of the flight).
+export const LANE_HELPERS = [
+  { id: 'mushroom', name: 'Bouncy Mushroom', zone: 'low', reach: 4, r: 3.6, apex: 14, attack: 0.5, color: '#ff4a4a' },
+  { id: 'seagull', name: 'Friendly Seagull', zone: 'any', r: 3.4, apex: 6, attack: 0.5, color: '#ffffff' },
+  { id: 'fan', name: 'Wind Fan', zone: 'any', r: 3.8, apex: 8, attack: 0.5, color: '#7ff6ff' },
+]
+// Bosses chase you once you pass `at` m (if the flight goes at least `after` m further).
+// Survive all `shots` for the bonus: x`bonus` the distance Wins of `at` (x3 the first time).
+export const LANE_BOSSES = [
+  { id: 'kingDragon', name: 'King Slime Dragon', at: 1000, after: 150, shots: 6, every: 0.95, windup: 0.45, intro: 1.4, shot: ['slimeball'], bonus: 1, color: '#3fe23a' },
+  { id: 'mechaDuck', name: 'Mecha-Duck Mk II', at: 2000, after: 150, shots: 8, every: 0.8, windup: 0.4, intro: 1.4, shot: ['missile'], bonus: 1.5, color: '#5fe0ff' },
+  { id: 'skyWhale', name: 'Sky Whale', at: 2800, after: 120, shots: 6, every: 1, windup: 0.5, intro: 1.6, shot: ['tailslam', 'geyser'], bonus: 2, color: '#6a5cff' },
+]
+// Flight Gear (the Gear window): levels bought with Wins. per = effect per level.
+export const GEAR = [
+  { id: 'dash', name: 'Air Dash', icon: 'dash', desc: 'Unlocks the DASH button (Space): a quick sideways burst. Levels cut the cooldown.', prices: [250, 6000, 90000, 1.5e6], cooldown: [3.2, 2.4, 1.8, 1.3] },
+  { id: 'shield', name: 'Shield Bubble', icon: 'shield', desc: 'A bubble that blocks one hit. +1 bubble per flight per level.', prices: [1200, 35000, 500000] },
+  { id: 'suit', name: 'Slime-Proof Suit', icon: 'suit', desc: 'Grabs, traps and drags hold you shorter and cost less.', per: 0.12, prices: [600, 8000, 70000, 500000, 4e6] },
+  { id: 'wings', name: 'Glide Wings', icon: 'wings', desc: 'Lose less distance from every hit.', per: 0.08, prices: [900, 12000, 120000, 900000, 7e6] },
+  { id: 'boots', name: 'Anti-Magnet Boots', icon: 'boots', desc: 'Weaker Magnet Mole pull, owl dives and Robo-Duck kicks.', per: 0.2, prices: [2000, 25000, 250000, 2.5e6] },
+  { id: 'escape', name: 'Quick Escape', icon: 'escape', desc: 'Fewer taps to break out of bubbles and webs.', per: 1.5, prices: [700, 9000, 100000, 1e6] },
+  { id: 'radar', name: 'Animal Radar', icon: 'radar', desc: 'Warnings show up earlier.', per: 0.14, prices: [1500, 20000, 200000, 2e6] },
+]
 
 // Regions of the slime river (distance from the zone, m). Each gets its own bank
 // colours and trees, a floating name sign over the river, and its name shows above
@@ -423,7 +542,7 @@ export const EGGS = [
     { id: 'phoenix', name: 'Aurora Phoenix', rarity: 'Mythic', chance: 5, boost: 50, look: { kind: 'bird', body: '#ff9a1f', accent: '#ffe14a', wings: true, glow: '#ffb347' } },
     { id: 'starmane', name: 'Starmane Pegasus', rarity: 'Secret', chance: 0.0008, boost: 400, look: { kind: 'horse', body: '#fdf6ff', accent: '#b45cff', horn: true, wings: true, glow: '#e6a8ff' } },
   ] },
-  { id: 'exclusive', name: 'Exclusive Egg', price: 120000, x: -13, z: -31, look: 'exclusive', pets: [
+  { id: 'exclusive', name: 'Exclusive Egg', price: 250000, x: -13, z: -31, look: 'exclusive', pets: [
     { id: 'gryphon', name: 'Ruby Gryphon', rarity: 'Legendary', chance: 49.9995, boost: 80, look: { kind: 'bird', body: '#e8303a', accent: '#ffd23a', wings: true, glow: '#ff5050' } },
     { id: 'sdragon', name: 'Sapphire Wyrm', rarity: 'Mythic', chance: 35, boost: 120, look: { kind: 'dragon', body: '#2a6bff', accent: '#9ff3ff', wings: true, glow: '#44aaff' } },
     { id: 'lion', name: 'Crown Lion', rarity: 'Mythic', chance: 15, boost: 200, look: { kind: 'cat', body: '#ffc93a', accent: '#ff7a1a', mane: true, glow: '#ffd700' } },
@@ -449,9 +568,11 @@ export const PET_SLOTS = 3 // equipped at once (+1 with the Extra Slot pass)
 export const EGG_HATCH = {
   range: 4.2, // m from the egg's centre where its panel opens
   upgrades: [
-    { n: 3, price: 9000, color: '#ffd23a' },
-    { n: 8, price: 45000, color: '#3fa2ff' },
-    { n: 16, price: 150000, color: '#ff6ad5' },
+    // Priced against the egg ladder (Rainbow 25k, Exclusive 250k): +3 ~ 2.5 Rainbow eggs,
+    // +16 ~ 6 Exclusive eggs. They were 9k / 45k / 150k, less than one Exclusive egg.
+    { n: 3, price: 60000, color: '#ffd23a' },
+    { n: 8, price: 400000, color: '#3fa2ff' },
+    { n: 16, price: 1500000, color: '#ff6ad5' },
   ],
   anim: 2.4, // s of the hatch animation (wobble, crack, reveal)
   autoAnim: 1.5, // s per batch while Auto is on

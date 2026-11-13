@@ -1,19 +1,23 @@
 import { Quaternion, Vector3 } from 'three'
 import * as CFG from './config.js'
-import { CHANNEL, FLIGHT, FLY_ZONE, PLAZA, RIVER_REGIONS, SPAWN } from './config.js'
+import { CHANNEL, FLIGHT, FLY_ZONE, LANE, LAUNCHERS, PLAZA, RIVER_REGIONS, SPAWN } from './config.js'
 import { inputState } from './input.js'
 import { player, resetPlayer, setPlayerOverride } from './player.js'
 import { setFlightView, shake, syncYawToPlayer } from './camera.js'
-import { createLaunchers } from './launcher.js'
+import { createLauncher } from './launcher.js'
 import { buildRiver } from './river.js'
 import { createFlightHud } from './flightHud.js'
 import { createTrail } from './trail.js'
 import * as snd from './audio/flight.js'
+import * as laneSnd from './audio/lane.js'
 import { addSkill, changed, skillPerClick, state, trailById, winsMult } from './state.js'
+import { createLane, distanceWins } from './lane/hazards.js'
+import { createLaneHud } from './laneHud.js'
 
 // The fly sequence. Standing in the yellow Flying Zone shows a FLY button (E on
 // desktop). Pressing it:
-//   hop    the player jumps into the nearest giant slingshot's pouch
+//   summon a giant copy of the equipped slingshot spins up out of the ground ahead
+//   hop    the player jumps into its pouch (or onto the muzzle of a blaster)
 //   pull   the pouch is drawn back, the straps creak
 //   air    release: one big arc with forward somersaults, the counter climbing
 //   hop i  touchdown -> skip across the slime like a stone (each skip pays Skill)
@@ -35,12 +39,69 @@ export function flightDistance() {
 }
 
 export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDone }) {
-  const launchers = createLaunchers(scene)
+  const launcher = createLauncher(scene)
+  const vanishAt = new Vector3()
   buildRiver(scene)
   const hud = createFlightHud()
   const trail = createTrail(scene)
   const surface = CHANNEL.slimeY
   const trailPos = new Vector3()
+  const holdTmp = new Vector3()
+  let slowLeft = 0 // s of hit-stop slow motion left (real time)
+
+  // Lane animals (lane/hazards.js): they read the planned path and re-plan it on hits.
+  const laneHud = createLaneHud()
+  const lane = createLane({
+    scene,
+    fx,
+    hud: laneHud,
+    ops: {
+      timeTo: (z) => timeTo(z),
+      zAfter: (s) => zAfter(s),
+      yAt: (z) => yAt(z),
+      endZ: () => endZ(),
+      dist: () => f?.dist ?? 0,
+      planD: () => f?.plan?.D ?? 0,
+      getX: () => f?.x ?? player.position.x,
+      setX: (x) => {
+        if (f) f.x = clamp(x, -CHANNEL.halfWidth + 3, CHANNEL.halfWidth - 3)
+      },
+      lockSteer: (s) => {
+        if (f) f.steerLock = Math.max(f.steerLock, s)
+      },
+      knock(o) {
+        if (f?.phase === 'fly' && !f.held) replan(remainingL() * o.factor, o)
+      },
+      hold(get) {
+        if (!f) return
+        f.holdRem = remainingL()
+        f.held = get
+        setFlightView('skip')
+      },
+      release(o) {
+        if (!f || !f.held) return
+        f.held = null
+        if (o.resetDist) f.dist = distOf(player.position.z) // carried back: that distance is lost
+        if (f.phase === 'fly') replan(f.holdRem * o.factor, o)
+      },
+      boost(o) {
+        if (f?.phase !== 'fly' || f.held) return 0
+        const before = remainingL()
+        replan(before + o.add, o)
+        return Math.max(0, remainingL() - before)
+      },
+      slowMo: (s) => {
+        slowLeft = Math.max(slowLeft, s)
+      },
+      shake: (m) => {
+        if (state.settings?.shake !== false) shake(m)
+      },
+      renderPos: () => player.renderPosition,
+      velocity: () => player.velocity,
+    },
+  })
+  laneHud.onDash(() => f?.phase === 'fly' && lane.dash(Math.sign(inputState.move.x)))
+  laneHud.onMash(() => lane.mash())
 
   let f = null // the flight in progress (see start)
   let autoDelay = 0
@@ -57,51 +118,114 @@ export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDo
   function plan(p0) {
     const D = flightDistance()
     const k = Math.min(1, D / FLIGHT.maxDistance)
-    const air = D * FLIGHT.airShare + (p0.z - PLAZA.minZ)
-    const n = clamp(Math.round(FLIGHT.skips.base + Math.log2(1 + D / FLIGHT.skips.per)), FLIGHT.skips.min, FLIGHT.skips.max)
-    const slide = clamp(D * 0.05, FLIGHT.slide[0], FLIGHT.slide[1])
-    const hops = Math.max(0, D * (1 - FLIGHT.airShare) - slide)
-    const r = FLIGHT.hopDecay
-    const h1 = (hops * (1 - r)) / (1 - Math.pow(r, n))
-    const segs = []
-    {
-      const H = clamp(air * FLIGHT.airPeakPerMetre, FLIGHT.airPeak[0], FLIGHT.airPeak[1])
-      const g = lerp(FLIGHT.airGravity[0], FLIGHT.airGravity[1], Math.sqrt(k))
-      const vy = Math.sqrt(2 * g * H)
-      const T = (vy + Math.sqrt(vy * vy + 2 * g * (p0.y - surface))) / g
-      segs.push({ kind: 'air', z0: p0.z, L: air, T, y0: p0.y, vy, g })
-    }
-    let z = p0.z - air
-    for (let i = 0; i < n; i++) {
-      const L = h1 * Math.pow(r, i)
-      const H = clamp(L * FLIGHT.hopHeightPerMetre, FLIGHT.hopHeight[0], FLIGHT.hopHeight[1])
-      const g = FLIGHT.hopGravity
-      const vy = Math.sqrt(2 * g * H)
-      segs.push({ kind: 'hop', z0: z, L, T: (2 * vy) / g, y0: surface, vy, g, n: i + 1 })
-      z -= L
-    }
-    const last = segs[segs.length - 1]
-    const vLast = last.L / last.T
-    segs.push({ kind: 'slide', z0: z, L: slide, T: clamp((2 * slide) / vLast, FLIGHT.slideTime[0], FLIGHT.slideTime[1]) })
+    const segs = buildSegs(p0, D, k, { extraAir: p0.z - PLAZA.minZ, launch: true })
     return { D, k, segs, flips: Math.round(lerp(FLIGHT.flips[0], FLIGHT.flips[1], Math.sqrt(k))) }
   }
+  // The path from p0 covering L metres (+ extraAir): an arc to the slime, skips, a slide.
+  // Used for the launch and to re-plan after a lane animal hits / a helper boosts.
+  //   apex      m the arc climbs above p0 (default from its length); airShare of L in the arc
+  //   flips     somersaults during a re-planned arc (-1 = a backward tumble)
+  function buildSegs(p0, L, k, o = {}) {
+    const share = o.airShare ?? FLIGHT.airShare
+    const slide = clamp(L * 0.05, Math.min(FLIGHT.slide[0], L * 0.3), FLIGHT.slide[1])
+    const air = Math.max(0.3, L * share + (o.extraAir ?? 0))
+    const hops = Math.max(0, L * (1 - share) - slide)
+    const segs = []
+    {
+      const H = Math.max(0, o.apex ?? clamp(air * FLIGHT.airPeakPerMetre, FLIGHT.airPeak[0], FLIGHT.airPeak[1]))
+      const g = lerp(FLIGHT.airGravity[0], FLIGHT.airGravity[1], Math.sqrt(k))
+      const vy = Math.sqrt(2 * g * H)
+      const T = Math.max(0.18, (vy + Math.sqrt(vy * vy + 2 * g * Math.max(0, p0.y - surface))) / g)
+      segs.push({ kind: 'air', z0: p0.z, L: air, T, y0: p0.y, vy, g, launch: !!o.launch, flips: o.flips ?? 0 })
+    }
+    let z = p0.z - air
+    if (hops > 1) {
+      const n = clamp(Math.round(FLIGHT.skips.base + Math.log2(1 + L / FLIGHT.skips.per)), o.launch ? FLIGHT.skips.min : 1, FLIGHT.skips.max)
+      const r = FLIGHT.hopDecay
+      const h1 = (hops * (1 - r)) / (1 - Math.pow(r, n))
+      for (let i = 0; i < n; i++) {
+        const Lh = h1 * Math.pow(r, i)
+        const H = clamp(Lh * FLIGHT.hopHeightPerMetre, FLIGHT.hopHeight[0], FLIGHT.hopHeight[1])
+        const g = FLIGHT.hopGravity
+        const vy = Math.sqrt(2 * g * H)
+        segs.push({ kind: 'hop', z0: z, L: Lh, T: (2 * vy) / g, y0: surface, vy, g, n: i + 1 })
+        z -= Lh
+      }
+    }
+    const last = segs[segs.length - 1]
+    const vLast = Math.max(2, last.L / last.T)
+    segs.push({ kind: 'slide', z0: z, L: slide, T: clamp((2 * slide) / vLast, FLIGHT.slideTime[0], FLIGHT.slideTime[1]) })
+    return segs
+  }
+  // --- Path queries for the lane animals (lane/hazards.js) -----------------------------------
+  const segZ = (s, t) => (s.kind === 'slide' ? s.z0 - s.L * easeOut(clamp(t / s.T, 0, 1)) : s.z0 - s.L * clamp(t / s.T, 0, 1))
+  const segY = (s, t) => (s.kind === 'slide' ? surface - 0.25 : Math.max(surface, s.y0 + s.vy * t - 0.5 * s.g * t * t))
+  function zAfter(sec) {
+    if (!f?.plan) return null
+    const segs = f.plan.segs
+    let t = f.segT + sec
+    for (let i = f.seg; i < segs.length; i++) {
+      if (t <= segs[i].T) return segZ(segs[i], t)
+      t -= segs[i].T
+    }
+    return null
+  }
+  // where on the plan z is: [segment, t within it, s before it from now]
+  function locate(z) {
+    const segs = f.plan.segs
+    let acc = -f.segT
+    for (let i = f.seg; i < segs.length; i++) {
+      const s = segs[i]
+      if (z >= s.z0 - s.L) {
+        const u = clamp((s.z0 - z) / Math.max(1e-6, s.L), 0, 1)
+        const t = s.kind === 'slide' ? s.T * (1 - Math.sqrt(1 - u)) : s.T * u
+        return [s, t, acc]
+      }
+      acc += s.T
+    }
+    return null
+  }
+  function timeTo(z) {
+    if (!f?.plan) return Infinity
+    const at = locate(z)
+    return at ? Math.max(0, at[2] + at[1]) : Infinity
+  }
+  function yAt(z) {
+    if (!f?.plan) return surface
+    const at = locate(z)
+    return at ? segY(at[0], at[1]) : surface
+  }
+  function endZ() {
+    if (!f?.plan) return 0
+    const last = f.plan.segs[f.plan.segs.length - 1]
+    return last.z0 - last.L
+  }
+  // Re-plan from where the player is now, covering L more metres.
+  function replan(L, o) {
+    const p = player.position
+    const maxL = Math.max(0, CHANNEL.length - 60 - distOf(p.z))
+    f.plan.segs = buildSegs(new Vector3(p.x, p.y, p.z), clamp(L, 0.5, maxL), f.plan.k, o)
+    f.seg = 0
+    f.segT = 0
+    f.flipsDone = 0
+    f.airS = 0
+    f.pitch0 = ((pitch % TAU) + TAU) % TAU
+    setFlightView('air')
+  }
+  const remainingL = () => Math.max(0, distOf(endZ()) - distOf(player.position.z))
 
   // --- Start ----------------------------------------------------------------------------
-  function nearestLauncher() {
-    const p = player.position
-    let best = launchers[0]
-    for (const l of launchers) if (Math.abs(l.x - p.x) < Math.abs(best.x - p.x)) best = l
-    return best
-  }
   function start() {
     if (f) return
-    const L = nearestLauncher()
+    const p = player.position
+    const x = clamp(p.x, -CHANNEL.halfWidth + 4, CHANNEL.halfWidth - 4)
+    const z = clamp(p.z - LAUNCHERS.ahead, FLY_ZONE.minZ + 1.6, FLY_ZONE.maxZ - 3)
+    launcher.summon(state.equippedSling || 'twig', x, z)
     f = {
-      phase: 'hop',
+      phase: 'summon',
       t: 0,
-      L,
-      from: new Vector3(player.position.x, player.position.y, player.position.z),
-      x: L.x,
+      from: new Vector3(p.x, p.y, p.z),
+      x,
       plan: null,
       seg: 0,
       segT: 0,
@@ -116,15 +240,25 @@ export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDo
       flipsDone: 0,
       airS: 0,
       squash: 0,
-      sinkT: 0,
       rewarded: false,
+      steerLock: 0, // s of no steering left (frozen)
+      held: null, // fn(out) while an animal holds the player (lane/hazards.js)
+      holdRem: 0,
+      pitch0: 0, // body pitch when the path was last re-planned
     }
     hud.showFly(false)
     hud.setFlying(true)
     setFlightView('aim')
     player.facing = Math.PI
     setPlayerOverride(step)
-    snd.hopIn()
+    snd.summon()
+    // sparkles fly from the player's hand to the spot, a glow ring where it rises
+    const dx = x - p.x
+    const dz = z - p.z
+    const dl = Math.hypot(dx, 0.6, dz)
+    fx.burst(26, { x: p.x, y: p.y + 1.3, z: p.z, dir: [dx / dl, 0.6 / dl, dz / dl], speed: dl / 0.45, jitter: 1.2, life: 0.5, size: 0.5, color: ['#ffffff', '#ffe46a', '#7fe7ff'], shape: 'star' })
+    fx.burst(30, { x, y: 0.2, z, spread: 1.6, speed: 4, up: 1.6, gravity: -4, life: 1, size: 0.55, color: ['#ffe46a', '#ffffff', '#b98cff'], shape: 'star' })
+    ringPulse(x, 0.12, z, '#ffe46a', 4)
   }
   hud.showFly(false, () => {
     if (!blocked()) start()
@@ -139,24 +273,52 @@ export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDo
     },
     true,
   )
+  // While flying: Space / Shift = Air Dash; when trapped, Space / E / A / D / arrows mash free.
+  const MASH_KEYS = ['Space', 'KeyE', 'Enter', 'KeyA', 'KeyD', 'KeyW', 'KeyS', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']
+  window.addEventListener(
+    'keydown',
+    (e) => {
+      if (!f || f.phase !== 'fly' || e.repeat) return
+      if (lane.trapped()) {
+        if (MASH_KEYS.includes(e.code)) {
+          lane.mash()
+          e.preventDefault()
+        }
+        return
+      }
+      if (e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+        lane.dash(Math.sign(inputState.move.x))
+        e.preventDefault()
+      }
+    },
+    true,
+  )
 
   function release() {
-    const L = f.L
+    const L = launcher
     const p0 = L.seat(new Vector3())
     f.plan = plan(p0)
     f.phase = 'fly'
     f.seg = 0
     f.segT = 0
+    const cannon = L.cannon
     L.release()
     const k = f.plan.k
-    snd.fire(Math.sqrt(k))
+    if (cannon) snd.boom(Math.sqrt(k))
+    else snd.fire(Math.sqrt(k))
     if (state.settings?.shake !== false) shake(0.35)
     setFlightView('air')
     fx.burst(40, { x: p0.x, y: p0.y + 0.5, z: p0.z, spread: 1.2, speed: 9, up: 0.6, gravity: -12, drag: 1.5, life: 0.9, size: 0.5, color: ['#ffd23a', '#ffffff', '#5fe0ff'], shape: 'star' })
-    fx.burst(24, { x: L.x, y: 0.3, z: L.z, spread: 2.5, speed: 5, up: 0.4, gravity: -8, drag: 2, life: 0.8, size: 0.9, color: ['#fff3c0', '#ffffff'], alpha: 0.6 })
-    ringPulse(L.x, 0.15, L.z, '#ffd23a')
+    const lp = L.position
+    fx.burst(24, { x: lp.x, y: 0.3, z: lp.z, spread: 2.5, speed: 5, up: 0.4, gravity: -8, drag: 2, life: 0.8, size: 0.9, color: ['#fff3c0', '#ffffff'], alpha: 0.6 })
+    if (cannon) {
+      fx.burst(30, { x: p0.x, y: p0.y + 0.4, z: p0.z, spread: 0.8, speed: 7, dir: [0, 0.6, -1], jitter: 0.6, drag: 2.5, life: 1.2, size: 1.6, sizeEnd: 2.6, color: ['#d8dde6', '#ffffff', '#a8b0bc'], alpha: 0.7, additive: false })
+      fx.burst(20, { x: p0.x, y: p0.y + 0.4, z: p0.z, spread: 0.5, speed: 10, life: 0.35, size: 1.1, color: ['#fff3a0', '#ff9a3a'] })
+    }
+    ringPulse(lp.x, 0.15, lp.z, '#ffd23a')
     trail.setColors(trailById(state.trail)?.colors ?? CFG.DEFAULT_TRAIL_COLORS ?? ['#ffffff', '#cfe9ff'])
     trail.start(trailPos.set(p0.x, p0.y + 1, p0.z))
+    lane.begin()
   }
 
   // --- Events on the slime ----------------------------------------------------------------
@@ -170,19 +332,20 @@ export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDo
     ringPulse(x, surface + 0.08, z, '#a6ff7a', 5 + 5 * s)
   }
   function onSkip(seg) {
-    f.skips = seg.n
+    f.skips++ // counts across re-plans (a hit starts new skips)
+    const n = f.skips
     const pos = player.position
     const k = Math.min(1.3, 0.5 + seg.L / 60)
     splash(pos.x, pos.z, k)
-    snd.skip(seg.n, k)
+    snd.skip(n, k)
     if (state.settings?.shake !== false) shake(0.08 + 0.1 * Math.min(1, k))
-    const gain = Math.round(seg.n * FLIGHT.skipSkill * skillPerClick())
+    const gain = Math.round(n * FLIGHT.skipSkill * skillPerClick())
     if (gain > 0) {
       addSkill(gain)
       f.skillGained += gain
       changed()
     }
-    hud.skip(seg.n, gain)
+    hud.skip(n, gain)
     f.squash = 1
     f.spinRate = TAU / seg.T // one flat spin per hop, like a skipping stone
   }
@@ -194,17 +357,29 @@ export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDo
   }
   function finishFlight() {
     const dist = f.dist
-    const mult = winsMult()
-    const wins = Math.round(Math.floor(dist / FLIGHT.metresPerWin) * mult)
+    // Wins: distance Wins (curving up with distance) x dodge bonus + boss bonuses,
+    // x the usual Wins multiplier, x2 for the first LANE.beginnerFlights flights.
+    const ls = lane.summary()
+    const beginner = state.flights < LANE.beginnerFlights ? LANE.beginnerMult : 1
+    const mult = winsMult() * ls.mult * beginner
+    const wins = Math.round((distanceWins(dist) * ls.mult + ls.bonusWins) * winsMult() * beginner)
     state.wins += wins
     state.tokens += FLIGHT.raceTokensPerFlight
     state.flights++
     if (dist > state.bestDistance) state.bestDistance = dist
-    if (dist >= 1000 && state.stats) state.stats.longFlights = (state.stats.longFlights ?? 0) + 1
+    if (state.stats) {
+      if (dist >= 1000) state.stats.longFlights = (state.stats.longFlights ?? 0) + 1
+      state.stats.dodges = (state.stats.dodges ?? 0) + ls.dodges
+      state.stats.closeCalls = (state.stats.closeCalls ?? 0) + ls.near
+      state.stats.laneHits = (state.stats.laneHits ?? 0) + ls.hits
+      state.stats.boosts = (state.stats.boosts ?? 0) + ls.boosts
+    }
     changed()
     if (state.settings?.flightAlerts !== false) {
-      const sub = `${Math.floor(dist).toLocaleString('en-US')} m · ${f.skips} skips${FLIGHT.raceTokensPerFlight ? ` · +${FLIGHT.raceTokensPerFlight} Race Token` : ''}`
+      const sub = `${Math.floor(dist).toLocaleString('en-US')} m · ${f.skips} skips${ls.on ? ` · ${ls.dodges} dodges` : ''}${FLIGHT.raceTokensPerFlight ? ` · +${FLIGHT.raceTokensPerFlight} Race Token` : ''}`
       hud.reward(wins, mult, sub, snd.count)
+      laneHud.summary(ls, beginner)
+      if (beginner > 1) laneSnd.beginnerBonus()
     }
     snd.reward(wins)
     f.rewarded = true
@@ -212,17 +387,33 @@ export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDo
 
   // --- Physics tick (replaces the character controller while flying) -------------------------
   function steer(dt, pl) {
+    if (f.steerLock > 0) {
+      f.steerLock = Math.max(0, f.steerLock - dt) // frozen: no steering
+      return
+    }
     f.x = clamp(f.x + inputState.move.x * FLIGHT.steer * dt, -CHANNEL.halfWidth + 3, CHANNEL.halfWidth - 3)
     pl.facing = Math.PI - inputState.move.x * 0.35
   }
   const prevPos = new Vector3()
-  function step(dt, pl) {
+  function step(rawDt, pl) {
     if (!f) return
     prevPos.set(pl.position.x, pl.position.y, pl.position.z)
+    const dt = f.phase === 'fly' && slowLeft > 0 ? rawDt * LANE.slowMo : rawDt // hit stop
     f.t += dt
-    if (f.phase === 'hop') {
+    if (f.phase === 'summon') {
+      pl.position.x = f.from.x
+      pl.position.y = f.from.y
+      pl.position.z = f.from.z
+      pl.facing = Math.PI
+      pl.grounded = true
+      if (launcher.summoned()) {
+        f.phase = 'hop'
+        f.t = 0
+        snd.hopIn()
+      }
+    } else if (f.phase === 'hop') {
       const s = Math.min(1, f.t / FLIGHT.hopIn)
-      const seat = f.L.seat(new Vector3())
+      const seat = launcher.seat(new Vector3())
       const e = easeOut(s)
       pl.position.x = lerp(f.from.x, seat.x, e)
       pl.position.z = lerp(f.from.z, seat.z, e)
@@ -232,17 +423,27 @@ export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDo
       if (s >= 1) {
         f.phase = 'pull'
         f.t = 0
-        snd.stretch(FLIGHT.pull)
+        if (launcher.cannon) snd.charge(FLIGHT.pull)
+        else snd.stretch(FLIGHT.pull)
       }
     } else if (f.phase === 'pull') {
       const p = easeInOut(Math.min(1, f.t / FLIGHT.pull))
-      f.L.setPull(p)
-      const seat = f.L.seat(new Vector3())
+      launcher.setPull(p)
+      const seat = launcher.seat(new Vector3())
       pl.position.x = seat.x
       pl.position.y = seat.y
       pl.position.z = seat.z
       pl.grounded = false
       if (f.t >= FLIGHT.pull + 0.12) release()
+    } else if (f.phase === 'fly' && f.held) {
+      // an animal holds the player: the path waits, the feet follow its grab point
+      f.held(holdTmp)
+      pl.position.x = holdTmp.x
+      pl.position.y = holdTmp.y
+      pl.position.z = holdTmp.z
+      f.x = clamp(holdTmp.x, -CHANNEL.halfWidth + 3, CHANNEL.halfWidth - 3)
+      pl.grounded = false
+      f.dist = Math.max(f.dist, distOf(pl.position.z))
     } else if (f.phase === 'fly') {
       steer(dt, pl)
       f.segT += dt
@@ -271,6 +472,7 @@ export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDo
           trail.stop()
           snd.sink()
           setFlightView('rest')
+          lane.end()
           finishFlight()
         }
       } else {
@@ -289,6 +491,7 @@ export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDo
         f.phase = 'return'
         f.t = 0
         hud.hideReward()
+        laneHud.hideSummary()
         hud.fade(true)
         snd.whooshBack()
       }
@@ -298,10 +501,10 @@ export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDo
         return
       }
     }
-    if (dt > 0 && f) {
-      pl.velocity.x = (pl.position.x - prevPos.x) / dt
-      pl.velocity.y = (pl.position.y - prevPos.y) / dt
-      pl.velocity.z = (pl.position.z - prevPos.z) / dt
+    if (rawDt > 0 && f) {
+      pl.velocity.x = (pl.position.x - prevPos.x) / rawDt
+      pl.velocity.y = (pl.position.y - prevPos.y) / rawDt
+      pl.velocity.z = (pl.position.z - prevPos.z) / rawDt
     }
   }
 
@@ -311,6 +514,9 @@ export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDo
   }
   function end() {
     f = null
+    lane.finish()
+    laneHud.hideSummary()
+    launcher.remove()
     setPlayerOverride(null)
     setFlightView(null)
     hud.counter(false)
@@ -334,9 +540,25 @@ export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDo
     return p.x > FLY_ZONE.minX && p.x < FLY_ZONE.maxX && p.z > FLY_ZONE.minZ && p.z < FLY_ZONE.maxZ && p.y < 1.2
   }
   function update(dt, t) {
-    for (const l of launchers) l.update(dt, t)
+    const ev = launcher.update(dt, t)
+    if (ev === 'landed') {
+      const lp = launcher.position
+      snd.plant(launcher.cannon)
+      fx.burst(22, { x: lp.x, y: 0.25, z: lp.z, spread: 2.2, speed: 4, up: 0.5, gravity: -9, drag: 2, life: 0.7, size: 0.8, color: ['#fff3c0', '#ffffff'], alpha: 0.6 })
+      if (state.settings?.shake !== false) shake(0.12)
+    } else if (ev === 'vanishing') {
+      vanishAt.copy(launcher.position)
+    } else if (ev === 'gone') {
+      snd.poof()
+      fx.burst(30, { x: vanishAt.x, y: 2.5, z: vanishAt.z, spread: 1.8, speed: 4, up: 0.8, drag: 2.5, life: 0.8, size: 1.3, sizeEnd: 2, color: ['#ffffff', '#e9f2ff'], alpha: 0.75, additive: false })
+      fx.burst(18, { x: vanishAt.x, y: 3, z: vanishAt.z, spread: 1.5, speed: 6, life: 0.7, size: 0.5, color: ['#ffe46a', '#ffffff'], shape: 'star' })
+    }
     const rp = player.renderPosition
     trail.update(dt, trailPos.set(rp.x, rp.y + 0.9, rp.z), 0.26, t)
+    // lane animals (slowed with the flight during a hit stop)
+    const laneDt = f?.phase === 'fly' && slowLeft > 0 ? dt * LANE.slowMo : dt
+    slowLeft = Math.max(0, slowLeft - dt)
+    lane.update(laneDt, f?.phase === 'fly')
     if (!f) {
       const zone = inZone()
       const canFly = zone && !blocked()
@@ -410,7 +632,21 @@ export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDo
     if (f) {
       const seg = f.plan?.segs[f.seg]
       if (f.phase === 'pull') targetPitch = -0.3 * easeInOut(Math.min(1, f.t / FLIGHT.pull)) // leaning back into the draw
-      else if (f.phase === 'fly' && seg?.kind === 'air') {
+      else if (f.phase === 'fly' && f.held) {
+        // caught: flailing
+        targetPitch = 0.6 + Math.sin(f.t * 9) * 0.45
+        targetRoll = Math.sin(f.t * 7.3) * 0.5
+        f.spinRate *= Math.exp(-4 * dt)
+        f.spin += f.spinRate * dt
+      } else if (f.phase === 'fly' && seg?.kind === 'air' && !seg.launch) {
+        // a re-planned arc (knocked / boosted): from the pose at the hit into a dive,
+        // tumbling backward after a hit, a forward flip after a boost
+        targetPitch = lerp(f.pitch0, 1.45 + TAU * (seg.flips ?? 0), easeOutCubic(f.airS))
+        targetRoll = -inputState.move.x * 0.45
+        f.spinRate *= Math.exp(-3 * dt)
+        f.spin += f.spinRate * dt
+        snap = true
+      } else if (f.phase === 'fly' && seg?.kind === 'air') {
         // forward somersaults that settle into a superman dive
         const total = TAU * f.plan.flips + 1.3
         targetPitch = total * easeOutCubic(f.airS)
@@ -454,6 +690,9 @@ export function createFlight({ scene, fx, ringPulse, blocked = () => false, onDo
     applyPose,
     teleportToZone,
     active: () => !!f,
+    // Body tilt for the other players' copy of this flight (net.js `pose`): somersault, bank, spin.
+    pose: () => ({ pitch, roll, spin: f ? spinYaw : 0 }),
     debug: () => f, // dev console: __game.game.flight.debug()
+    lane, // dev console: __game.game.flight.lane.debug()
   }
 }

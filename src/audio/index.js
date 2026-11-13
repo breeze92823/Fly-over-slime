@@ -8,6 +8,7 @@ import * as sfx from './sfx.js'
 import { startMusic } from './music.js'
 
 export { sfx, setDucked }
+export { setAdMuted, setMusicLevel, setVolume } from './core.js'
 export const setSfxOn = setSfxEnabled
 export const setMusicOn = setMusicEnabled
 

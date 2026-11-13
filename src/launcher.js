@@ -1,201 +1,214 @@
-import { BoxGeometry, CanvasTexture, ConeGeometry, CylinderGeometry, DoubleSide, Group, Mesh, MeshStandardMaterial, Object3D, RepeatWrapping, SphereGeometry, SRGBColorSpace, Vector3 } from 'three'
+import { BoxGeometry, CylinderGeometry, DoubleSide, Group, Mesh, MeshStandardMaterial, Vector3 } from 'three'
 import { FLIGHT, LAUNCHERS } from './config.js'
-import { solidPole } from './propkit.js'
-import { mulberry32 } from './textures.js'
+import { buildSlingshot } from './props.js'
 
-// The giant slingshots standing on the Flying Zone (original procedural model):
-// a striped-wood trunk and Y fork wrapped in grey metal bands with white rivets,
-// two thick black rubber straps and a leather-ish pouch the player sits in.
-// setPull(p) draws the pouch back (0..1); release() lets it spring forward with
-// a damped wobble; update(dt, t) animates the bands. Local +Z is "back" (toward
-// the lobby), the fork opens along X and the shot goes toward -Z (north).
+// The launcher: nothing stands on the Flying Zone. When the player presses FLY, a
+// giant copy of their equipped slingshot (props.js buildSlingshot, without its
+// small band) is summoned in front of them: it spins up out of the ground with an
+// elastic bounce, gets thick stretchy straps and a pouch the player sits in, is
+// drawn back (setPull 0..1), fires (release: damped spring wobble) and then shrinks
+// away with a poof (vanish). Blaster-type styles become a giant cannon instead:
+// the player sits on the muzzle, the barrel cranks up while charging and recoils.
+// Group space: +Z is "back" (toward the lobby), the shot goes toward -Z (north).
 
-let woodTex = null
-function paintWood() {
-  if (woodTex) return woodTex
-  const c = document.createElement('canvas')
-  c.width = 64
-  c.height = 256
-  const g = c.getContext('2d')
-  const rand = mulberry32(77)
-  g.fillStyle = '#b8612a'
-  g.fillRect(0, 0, 64, 256)
-  // long vertical grain streaks in two tones, like the reference's chunky toy wood
-  for (let i = 0; i < 18; i++) {
-    const x = rand() * 64
-    const w = 2 + rand() * 6
-    g.fillStyle = rand() < 0.5 ? '#8f4519' : '#cf7a38'
-    g.globalAlpha = 0.55 + rand() * 0.35
-    g.fillRect(x, 0, w, 256)
-  }
-  g.globalAlpha = 0.35
-  for (let i = 0; i < 10; i++) {
-    g.fillStyle = '#6e3410'
-    g.fillRect(rand() * 64, rand() * 256, 1.5 + rand() * 2, 30 + rand() * 80)
-  }
-  g.globalAlpha = 1
-  woodTex = new CanvasTexture(c)
-  woodTex.colorSpace = SRGBColorSpace
-  woodTex.wrapS = woodTex.wrapT = RepeatWrapping
-  return woodTex
+const easeOutBack = (k) => {
+  const c = 2.2
+  return 1 + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2)
 }
-
+const easeOut = (k) => 1 - (1 - k) * (1 - k)
 const tmpA = new Vector3()
 const tmpB = new Vector3()
-const up = new Vector3(0, 1, 0)
 
-// A band of metal with white rivet triangles around it.
-function metalBand(parent, mats, r, h, y, x = 0, rivets = 6) {
-  const band = new Mesh(new CylinderGeometry(r, r, h, 16), mats.metal)
-  band.position.set(x, y, 0)
-  band.castShadow = band.receiveShadow = true
-  parent.add(band)
-  for (let i = 0; i < rivets; i++) {
-    const a = (i / rivets) * Math.PI * 2 + 0.3
-    const cone = new Mesh(new ConeGeometry(h * 0.28, h * 0.42, 3), mats.rivet)
-    cone.position.set(x + Math.sin(a) * (r + 0.02), y, Math.cos(a) * (r + 0.02))
-    cone.rotation.set(Math.PI / 2, 0, -a)
-    cone.lookAt(x + Math.sin(a) * 10, y, Math.cos(a) * 10)
-    cone.rotateX(Math.PI / 2)
-    parent.add(cone)
-  }
-  return band
-}
-
-// A cylinder from point a to point b (local), radius r.
-function limb(parent, mat, a, b, r0, r1 = r0) {
-  const len = a.distanceTo(b)
-  const m = new Mesh(new CylinderGeometry(r1, r0, len, 14), mat)
-  m.position.copy(a).add(b).multiplyScalar(0.5)
-  m.quaternion.setFromUnitVectors(up, tmpA.copy(b).sub(a).normalize())
-  m.castShadow = m.receiveShadow = true
-  parent.add(m)
-  return m
-}
-
-function buildOne() {
-  const L = LAUNCHERS
-  const tex = paintWood()
-  const mats = {
-    wood: new MeshStandardMaterial({ map: tex, roughness: 0.7 }),
-    metal: new MeshStandardMaterial({ color: '#a7b0ba', roughness: 0.35, metalness: 0.6 }),
-    rivet: new MeshStandardMaterial({ color: '#ffffff', roughness: 0.5 }),
-    rubber: new MeshStandardMaterial({ color: '#1c1e25', roughness: 0.75 }),
-    pouch: new MeshStandardMaterial({ color: '#2a2c35', roughness: 0.8, side: DoubleSide }),
-  }
-  const root = new Group()
-  const S = L.armSpread
-  // trunk + base
-  limb(root, mats.wood, new Vector3(0, 0, 0), new Vector3(0, 2.75, 0), 0.82, 0.7)
-  metalBand(root, mats, 0.92, 0.55, 0.42)
-  metalBand(root, mats, 0.82, 0.5, 2.05)
-  const knot = new Mesh(new SphereGeometry(0.86, 16, 12), mats.wood)
-  knot.position.y = 2.75
-  knot.scale.set(1.25, 0.8, 0.95)
-  knot.castShadow = true
-  root.add(knot)
-  // the fork: diagonal arms, then upright prongs with flat tops
-  const tips = []
-  for (const s of [-1, 1]) {
-    const elbow = new Vector3(s * S, 4.35, 0)
-    limb(root, mats.wood, new Vector3(s * 0.35, 2.75, 0), elbow, 0.62, 0.58)
-    const top = new Vector3(s * (S + 0.25), L.height, 0)
-    limb(root, mats.wood, elbow, top, 0.58, 0.6)
-    const cap = new Mesh(new CylinderGeometry(0.6, 0.6, 0.18, 14), mats.wood)
-    cap.position.copy(top)
-    root.add(cap)
-    const j = new Mesh(new SphereGeometry(0.58, 12, 10), mats.wood)
-    j.position.copy(elbow)
-    root.add(j)
-    metalBand(root, mats, 0.7, 0.5, L.height - 0.75, s * (S + 0.22), 5)
-    tips.push(new Vector3(s * (S + 0.22) - s * 0.55, L.height - 0.75, 0.05))
-  }
-  // pouch: a curved strap cupping the seat from below and behind (open to -Z / up)
-  const pouch = new Group()
-  const cup = new Mesh(new CylinderGeometry(0.78, 0.78, 1.35, 16, 1, true, Math.PI * 1.25, Math.PI).rotateZ(Math.PI / 2), mats.pouch)
-  cup.castShadow = true
-  pouch.add(cup)
-  for (const s of [-1, 1]) {
-    const lip = new Mesh(new BoxGeometry(0.16, 0.5, 0.5), mats.rubber)
-    lip.position.set(s * 0.7, 0.15, 0.32)
-    pouch.add(lip)
-  }
-  pouch.position.set(0, L.pouchY, 0)
-  root.add(pouch)
-  // straps from each prong to the pouch sides (unit boxes stretched every frame)
-  const strapGeo = new BoxGeometry(1, 1, 1).translate(0, 0, 0.5)
-  const straps = tips.map(() => {
-    const m = new Mesh(strapGeo, mats.rubber)
-    m.castShadow = true
-    root.add(m)
-    return m
+function dispose(root) {
+  root.traverse((o) => {
+    o.geometry?.dispose()
+    const m = o.material
+    if (Array.isArray(m)) m.forEach((x) => x.dispose())
+    else m?.dispose()
   })
-  const anchor = new Object3D()
-  return { root, pouch, straps, tips, anchor }
 }
 
-export function createLaunchers(scene) {
+export function createLauncher(scene) {
   const L = LAUNCHERS
-  return L.xs.map((x, i) => {
-    const m = buildOne()
-    m.root.position.set(x, 0, L.z)
-    scene.add(m.root)
-    solidPole(0.8, 3, x, L.z) // the trunk blocks; the fork is above head height
-    let pull = 0 // 0 rest .. 1 full draw (negative = flung forward past rest)
-    let vel = 0
-    let springing = false
-    let sag = 0
-    const seat = new Vector3()
-    const api = {
-      index: i,
-      x,
-      z: L.z,
-      // Draw the pouch back (p 0..1); it sags as it stretches.
-      setPull(p) {
-        springing = false
-        pull = p
-        vel = 0
-      },
-      release() {
-        springing = true
-        vel = -6
-      },
-      // World position the seated player's feet should be at.
-      seat(out = seat) {
-        const p = m.pouch.position
-        return out.set(x + p.x, p.y - 0.95, L.z + p.z + 0.12)
-      },
-      update(dt, t) {
-        if (springing) {
-          // damped spring back to rest: overshoots forward and wobbles
-          const acc = -150 * pull - 5.5 * vel
-          vel += acc * dt
-          pull += vel * dt
-          if (Math.abs(pull) < 0.002 && Math.abs(vel) < 0.02) {
-            springing = false
-            pull = 0
-            vel = 0
-          }
-        }
-        sag += ((Math.max(0, pull) * FLIGHT.pullDown) - sag) * Math.min(1, dt * 10)
-        const idle = springing || pull !== 0 ? 0 : Math.sin(t * 1.3 + i) * 0.04
-        m.pouch.position.set(0, L.pouchY - sag + idle * 0.5, pull * FLIGHT.pullBack + idle)
-        m.pouch.rotation.x = -pull * 0.35
-        // stretch the straps from the prong tips to the pouch sides
-        m.straps.forEach((s, k) => {
-          const side = k === 0 ? -1 : 1
-          tmpA.copy(m.tips[k])
-          tmpB.set(side * 0.66, m.pouch.position.y + 0.25, m.pouch.position.z + 0.3)
-          const len = Math.max(0.05, tmpA.distanceTo(tmpB))
-          s.position.copy(tmpA)
-          s.lookAt(tmpB.x + m.root.position.x, tmpB.y, tmpB.z + m.root.position.z)
-          // a stretched strap gets thinner
-          const thin = 1 / Math.sqrt(Math.max(1, len / 1.6))
-          s.scale.set(0.42 * thin, 0.14, len)
-        })
-      },
+  let rig = null // the summoned launcher, or null
+  const seatV = new Vector3()
+
+  function build(style) {
+    const model = buildSlingshot(style, { bands: false })
+    const info = model.userData.sling ?? {}
+    const cannon = !!info.cannon
+    const S = cannon ? L.cannonScale : L.scale
+    model.traverse((o) => {
+      o.castShadow = true
+      o.receiveShadow = true
+    })
+    model.rotation.y = Math.PI // the hand-held model pulls toward -Z; ours toward +Z
+    model.scale.setScalar(S)
+    const root = new Group()
+    const body = new Group() // what scales / spins in and out
+    root.add(body)
+    body.add(model)
+    const r = { root, body, model, cannon, S, straps: [], tips: [], pouch: null, restPouch: null, barrel: info.barrel, barrelX: info.barrel?.rotation.x ?? 0 }
+    if (!cannon) {
+      // prong tips in body space (the model is turned PI: x and z flip)
+      r.tips = (info.tips ?? [new Vector3(-0.42, 1.5, 0), new Vector3(0.42, 1.5, 0)]).map((t) => new Vector3(-t.x * S, t.y * S, -t.z * S))
+      const p = info.pouch ?? new Vector3(0, 1.28, -0.22)
+      r.restPouch = new Vector3(0, p.y * S - 0.35, -p.z * S * 0.5)
+      const bandMat = new MeshStandardMaterial({ color: info.band ?? '#2a2c35', roughness: 0.75 })
+      const pouchMat = new MeshStandardMaterial({ color: info.band ?? '#2a2c35', roughness: 0.85, side: DoubleSide })
+      const pouch = new Group()
+      // a low sling under the seat (open to the front and above, so the rider stays in view)
+      const cup = new Mesh(new CylinderGeometry(0.62, 0.62, 1.3, 16, 1, true, Math.PI * 1.25, Math.PI * 0.85).rotateZ(Math.PI / 2), pouchMat)
+      cup.castShadow = true
+      pouch.add(cup)
+      for (const s of [-1, 1]) {
+        const lip = new Mesh(new BoxGeometry(0.16, 0.4, 0.45), bandMat)
+        lip.position.set(s * 0.66, -0.1, 0.25)
+        pouch.add(lip)
+      }
+      body.add(pouch)
+      r.pouch = pouch
+      const strapGeo = new BoxGeometry(1, 1, 1).translate(0, 0, 0.5)
+      r.straps = r.tips.map(() => {
+        const m = new Mesh(strapGeo, bandMat)
+        m.castShadow = true
+        body.add(m)
+        return m
+      })
     }
-    api.update(0, 0)
-    return api
-  })
+    return r
+  }
+
+  // State of the current rig.
+  let phase = 'none' // 'summon' | 'ready' | 'linger' | 'vanish'
+  let t = 0
+  let pull = 0
+  let vel = 0
+  let springing = false
+  let sag = 0
+  let kick = 0 // cannon recoil (m back)
+
+  function layout(time) {
+    const r = rig
+    if (r.cannon) {
+      // crank the barrel up as it charges; recoil slides the whole cannon back
+      r.barrel.rotation.x = r.barrelX - Math.max(0, pull) * 0.35
+      r.barrel.scale.z = 1 - Math.max(0, pull) * 0.12 + Math.max(0, -pull) * 0.1
+      r.model.position.z = kick
+      return
+    }
+    sag += (Math.max(0, pull) * FLIGHT.pullDown - sag) * 0.25
+    const idle = phase === 'ready' && pull === 0 ? Math.sin(time * 2.2) * 0.05 : 0
+    r.pouch.position.set(0, r.restPouch.y - sag, r.restPouch.z + pull * FLIGHT.pullBack + idle)
+    r.pouch.rotation.x = -pull * 0.35
+    r.straps.forEach((s, k) => {
+      const side = k === 0 ? -1 : 1
+      tmpA.copy(r.tips[k])
+      tmpB.set(side * 0.66, r.pouch.position.y - 0.05, r.pouch.position.z + 0.25)
+      const len = Math.max(0.05, tmpA.distanceTo(tmpB))
+      s.position.copy(tmpA)
+      s.lookAt(r.body.localToWorld(tmpB.clone()))
+      const thin = 1 / Math.sqrt(Math.max(1, len / 1.6))
+      s.scale.set(0.4 * thin, 0.14, len)
+    })
+  }
+
+  return {
+    get active() {
+      return !!rig
+    },
+    get cannon() {
+      return !!rig?.cannon
+    },
+    get position() {
+      return rig?.root.position
+    },
+    // Builds the giant `style` at (x, z) and starts its entrance.
+    summon(style, x, z) {
+      this.remove()
+      rig = build(style)
+      rig.root.position.set(x, 0, z)
+      rig.body.scale.setScalar(0.001)
+      scene.add(rig.root)
+      phase = 'summon'
+      t = 0
+      pull = vel = sag = kick = 0
+      springing = false
+      layout(0)
+    },
+    summoned: () => phase !== 'summon',
+    setPull(p) {
+      springing = false
+      pull = p
+      vel = 0
+    },
+    release() {
+      springing = true
+      vel = rig?.cannon ? -2 : -6
+      if (rig?.cannon) kick = 1.6
+      phase = 'linger'
+      t = 0
+    },
+    // World position the player's feet should be at while seated.
+    seat(out = seatV) {
+      if (!rig) return out.set(0, 0, 0)
+      rig.root.updateMatrixWorld(true)
+      if (rig.cannon) {
+        rig.barrel.localToWorld(out.set(0, 0.28, 1.05))
+        return out.setY(out.y + 0.05)
+      }
+      const p = rig.pouch.position
+      return rig.body.localToWorld(out.set(p.x, p.y - 0.62, p.z - 0.05))
+    },
+    remove() {
+      if (!rig) return
+      scene.remove(rig.root)
+      dispose(rig.root)
+      rig = null
+      phase = 'none'
+    },
+    // Returns an event name on the frame something happens: 'landed' (summon done), 'vanishing', 'gone'.
+    update(dt, time) {
+      if (!rig) return null
+      t += dt
+      let event = null
+      if (phase === 'summon') {
+        const k = Math.min(1, t / L.summon)
+        rig.body.scale.setScalar(Math.max(0.001, easeOutBack(k)))
+        rig.body.rotation.y = (1 - easeOut(k)) * Math.PI * 2 // spins in
+        rig.body.position.y = (1 - k) * -0.6
+        if (k >= 1) {
+          phase = 'ready'
+          rig.body.rotation.y = 0
+          rig.body.position.y = 0
+          event = 'landed'
+        }
+      } else if (phase === 'linger' && t >= L.linger) {
+        phase = 'vanish'
+        t = 0
+        event = 'vanishing'
+      } else if (phase === 'vanish') {
+        const k = Math.min(1, t / L.vanish)
+        const s = k < 0.25 ? 1 + k * 0.6 : 1.15 * (1 - (k - 0.25) / 0.75) // a little swell, then gone
+        rig.body.scale.setScalar(Math.max(0.001, s))
+        rig.body.rotation.y = k * Math.PI * 1.5
+        if (k >= 1) {
+          this.remove()
+          return 'gone'
+        }
+      }
+      if (springing) {
+        const stiff = rig.cannon ? 60 : 150
+        vel += (-stiff * pull - (rig.cannon ? 9 : 5.5) * vel) * dt
+        pull += vel * dt
+        if (Math.abs(pull) < 0.002 && Math.abs(vel) < 0.02) {
+          springing = false
+          pull = vel = 0
+        }
+      }
+      kick *= Math.exp(-5 * dt)
+      layout(time)
+      return event
+    },
+  }
 }

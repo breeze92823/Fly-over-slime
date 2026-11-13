@@ -140,7 +140,10 @@ const SLING_STYLES = {
   shadow: { wood: '#3a1f5a', wrap: '#8a3cff', band: '#14081f', spikes: '#b45cff' },
   sun: { wood: '#ffcf3a', wrap: '#fff1a8', band: '#b0700e', wings: '#ffffff', gold: true },
 }
-export function buildSlingshot(style) {
+// opts.bands = false leaves out the band + pouch (the giant launcher in launcher.js
+// draws its own stretchy ones). root.userData.sling describes the rig for it:
+// { tips, pouch, band } for a slingshot, { cannon, barrel, mouth } for a blaster.
+export function buildSlingshot(style, { bands = true } = {}) {
   const root = new Group()
   if (style === 'blaster') return buildBlaster(root)
   if (style === 'galaxy') return buildBlaster(root, { body: '#7a3cff', dark: '#ffd23a', wood: '#2a1a5a', muzzle: '#5ae8ff', hub: '#ff8fd8' })
@@ -158,13 +161,16 @@ export function buildSlingshot(style) {
   }
   put(root, new SphereGeometry(0.15, 10, 8), woodMat, 0, 0.82, 0)
   // band + pouch, pulled slightly back (-Z)
-  const bandMat = std(s.band, { roughness: 0.9 })
   const pouch = new Vector3(0, 1.28, -0.22)
-  for (const t of tips) {
-    const band = new CatmullRomCurve3([t.clone().setY(1.5), new Vector3(t.x * 0.45, 1.36, -0.15), pouch])
-    put(root, new TubeGeometry(band, 8, 0.03, 5), bandMat)
+  root.userData.sling = { tips: tips.map((t) => t.clone().setY(1.5)), pouch: pouch.clone(), band: s.band }
+  if (bands) {
+    const bandMat = std(s.band, { roughness: 0.9 })
+    for (const t of tips) {
+      const band = new CatmullRomCurve3([t.clone().setY(1.5), new Vector3(t.x * 0.45, 1.36, -0.15), pouch])
+      put(root, new TubeGeometry(band, 8, 0.03, 5), bandMat)
+    }
+    put(root, new SphereGeometry(0.1, 8, 6).scale(1.3, 0.8, 0.6), bandMat, pouch.x, pouch.y, pouch.z)
   }
-  put(root, new SphereGeometry(0.1, 8, 6).scale(1.3, 0.8, 0.6), bandMat, pouch.x, pouch.y, pouch.z)
   if (s.cap) for (const t of tips) put(root, new SphereGeometry(0.12, 10, 8), metal(s.cap), t.x, t.y, t.z)
   if (s.tip) for (const t of tips) put(root, new SphereGeometry(0.12, 10, 8), glowMat(s.tip, 2.2), t.x, t.y, t.z)
   if (s.gem) put(root, new OctahedronGeometry(0.13), glowMat(s.gem, 0.9), 0, 0.84, 0.13)
@@ -222,6 +228,7 @@ function buildBlaster(root, c = {}) {
   for (const z of [-0.15, 0.3, 0.85]) put(barrel, new TorusGeometry(0.31, 0.05, 8, 18), dark, 0, 0, z)
   put(barrel, new CylinderGeometry(0.2, 0.2, 0.05, 14).rotateX(Math.PI / 2), glowMat(c.muzzle ?? '#3cff3c', 2.2), 0, 0, 1.01)
   put(barrel, new SphereGeometry(0.3, 14, 10), body, 0, 0, -0.3)
+  root.userData.sling = { cannon: true, barrel, mouth: new Vector3(0, 0, 1.01) }
   return root
 }
 
@@ -824,12 +831,13 @@ function paintBoard(title, rows, color) {
   g.font = '700 22px Fredoka, Arial, sans-serif'
   g.textBaseline = 'middle'
   // podium: top three with circles
-  const podium = [[1, W / 2, 70, 44], [0, W / 2 - 150, 92, 36], [2, W / 2 + 150, 92, 36]]
+  // (rows[0] = 1st in the middle, rows[1] = 2nd on the left, rows[2] = 3rd on the right)
+  const podium = [[0, W / 2, 70, 44], [1, W / 2 - 150, 92, 36], [2, W / 2 + 150, 92, 36]]
   for (const [rank, x, y, r] of podium) {
     const row = rows[rank]
     g.beginPath()
     g.arc(x, y, r, 0, Math.PI * 2)
-    g.fillStyle = ['#ffd23a', '#d6dde6', '#e09a5a'][rank === 1 ? 0 : rank === 0 ? 1 : 2]
+    g.fillStyle = ['#ffd23a', '#d6dde6', '#e09a5a'][rank]
     g.fill()
     g.beginPath()
     g.arc(x, y, r - 6, 0, Math.PI * 2)
@@ -838,7 +846,7 @@ function paintBoard(title, rows, color) {
     g.fillStyle = '#ffffff'
     g.textAlign = 'center'
     g.font = '700 26px Fredoka, Arial, sans-serif'
-    g.fillText(`${rank === 1 ? 1 : rank === 0 ? 2 : 3}`, x, y - r - 4)
+    g.fillText(`${rank + 1}`, x, y - r - 4)
     g.font = '700 20px Fredoka, Arial, sans-serif'
     g.fillText(row?.name ?? '-', x, y + r + 16)
     g.fillStyle = '#ffd23a'

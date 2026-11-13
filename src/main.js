@@ -15,11 +15,15 @@ import { createFx } from './fx.js'
 import { buildProps } from './props.js'
 import { createHud } from './hud.js'
 import { createGame } from './game.js'
-import { installAudio } from './audio/index.js'
+import { installAudio, setAdMuted, setMusicLevel, setVolume } from './audio/index.js'
 import { onChange, state } from './state.js'
 import { buildDefaultCharacter, loadBaseCharacter } from './avatar/character.js'
 import { applyProportions, attachEquippedAccessories } from './avatar/loader.js'
 import { disposeAnimator, makeAnimator } from './avatar/animator.js'
+import { initNet, net, onNet, sendEmote, sendPose } from './net.js'
+import { EmotePlayer, captureBind } from './avatar/emotes.js'
+import { speechBubble } from './bubble.js'
+import { createRemotePlayers } from './remotePlayers.js'
 
 // Boot order: Bloxity SDK -> renderer -> Rapier (async wasm) -> ground + sky + lighting,
 // player body -> avatar (async, swaps in when ready) -> loop. The SDK is optional at every step.
@@ -33,6 +37,8 @@ let game = null
 function applySetting(key, value) {
   if (key === 'camera_sensitivity') setCameraSensitivity(value)
   else if (key === 'fullscreen') bloxity.requestFullscreen(value)
+  else if (key === 'master_volume') setVolume(value / 100)
+  else if (key === 'music_volume') setMusicLevel(value / 100)
   else if (key === 'graphics_quality' && renderer) {
     const next = graphicsPreset(value)
     renderer.shadowMap.enabled = next.shadows
@@ -104,9 +110,14 @@ let animator = null
 let generation = 0
 let avatarReady = false
 
+const emote = new EmotePlayer() // the Bloxity emote we are playing (portal emote wheel)
+let emoting = false // we told the room an emote is running
+
 function setAvatar(next) {
   if (avatar) playerGroup.remove(avatar)
   disposeAnimator(animator)
+  captureBind(next) // emotes pose bones as deltas over the bind pose
+  emote.stop()
   avatar = next
   playerGroup.add(avatar)
   animator = makeAnimator(avatar)
@@ -118,6 +129,32 @@ game = createGame({ scene, camera, fx, props, hud })
 game.setAvatar(playerGroup, avatar, animator)
 hud.update()
 onChange(() => hud.update())
+
+// --- Multiplayer + saving (net.js, remotePlayers.js) -------------------------
+// The other players in the room, and this player's pose for them: position, heading, animation state
+// (speed / vertical speed / grounded), the flight tilt and whether they are pulling the slingshot.
+const remotes = createRemotePlayers({ scene })
+function currentPose() {
+  const p = player.renderPosition
+  const flying = game.isFlying()
+  const tilt = flying ? game.flight.pose() : null
+  return {
+    x: p.x,
+    y: p.y,
+    z: p.z,
+    yaw: player.facing + (tilt?.spin ?? 0),
+    speed: flying ? 0 : Math.hypot(player.velocity.x, player.velocity.z),
+    vy: player.velocity.y,
+    grounded: player.grounded,
+    flying,
+    pitch: tilt?.pitch ?? 0,
+    roll: tilt?.roll ?? 0,
+    training: game.isTraining(),
+  }
+}
+onNet('hydrated', () => game.resync()) // the server's save replaced the local one
+onNet('leaderboard', (msg) => game.setBoards(msg))
+initNet({ pose: currentPose })
 
 async function loadAvatar() {
   // The SDK fires twice per change (optimistic + confirmed); only the newest load may land.
@@ -147,6 +184,23 @@ bloxity.onAvatarChanged(loadAvatar)
 bloxity.onProportionsChanged(() => applyProportions(avatar, bloxity.getProportions()))
 bloxity.onRespawnRequest(respawn)
 
+// Emotes from the portal's emote wheel: played on our avatar (standing still, not flying) and relayed.
+bloxity.onEmote(async (id) => {
+  if (game.isFlying()) return
+  const clip = (await bloxity.emoteClips()).get(id)
+  if (!clip) return // unknown ids are ignored quietly
+  emote.play(id, clip)
+  emoting = true
+  sendEmote(id)
+})
+// Chat: our own message as a bubble over our head (the others' in remotePlayers.js).
+let myBubble = null
+bloxity.onChat((m) => {
+  if (!m.isLocalPlayer) return
+  myBubble?.remove?.()
+  myBubble = speechBubble(playerGroup, m.text, 2.9)
+})
+
 // --- Modes + keys --------------------------------------------------------------
 onModeChanged((mode) => {
   playerGroup.visible = mode !== 'player' // first person: you are the camera
@@ -163,7 +217,7 @@ const clock = new Clock()
 let shownLoading = true
 let readySince = 0
 
-renderer.setAnimationLoop(() => {
+function frame() {
   const dt = Math.min(clock.getDelta(), 0.1) // clamp huge frames (tab switch, breakpoint)
   const elapsed = clock.elapsedTime
 
@@ -182,6 +236,17 @@ renderer.setAnimationLoop(() => {
     turn: 0,
   })
   game.afterAnimator()
+  // An emote plays over the idle pose and stops as soon as we move, jump or fly.
+  if (emoting) {
+    if (flying || !player.grounded || Math.hypot(player.velocity.x, player.velocity.z) > 0.6) emote.stop()
+    if (!emote.active || emote.stopping) {
+      emoting = false
+      sendEmote('')
+    }
+  }
+  emote.update(avatar, dt)
+  sendPose(currentPose())
+  remotes.update(dt, elapsed)
 
   updateCamera(camera, dt)
   world.update(dt, elapsed, camera)
@@ -198,6 +263,17 @@ renderer.setAnimationLoop(() => {
       bloxity.notifyFirstFrame()
     }
   }
+}
+renderer.setAnimationLoop(frame)
+
+// Ad breaks: the loop stops and the sound mutes until the break ends (Bloxity rule).
+bloxity.onAdBreak((on) => {
+  setAdMuted(on)
+  if (on) renderer.setAnimationLoop(null)
+  else {
+    clock.getDelta() // don't count the break as one huge frame
+    renderer.setAnimationLoop(frame)
+  }
 })
 
 window.addEventListener('beforeunload', bloxity.teardown)
@@ -208,5 +284,5 @@ if (import.meta.env.DEV) {
     resetPlayer({ x, y, z }, facing)
     syncYawToPlayer()
   }
-  window.__game = { player, scene, renderer, camera, postfx, bodies: bodyCount, toggleMode, teleport, state, game, hud }
+  window.__game = { player, scene, renderer, camera, postfx, bodies: bodyCount, toggleMode, teleport, state, game, hud, net, remotes }
 }

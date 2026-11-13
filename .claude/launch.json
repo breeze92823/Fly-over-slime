@@ -26,6 +26,16 @@
         "development"
       ],
       "port": 5247
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "../Fly-over-slime-backend",
+        "start"
+      ],
+      "port": 2567
     }
   ]
 }
