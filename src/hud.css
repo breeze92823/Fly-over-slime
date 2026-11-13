@@ -9,7 +9,7 @@
   --safe-t: env(safe-area-inset-top, 0px);
 }
 #hud, #hud * { box-sizing: border-box; font-family: Fredoka, 'Arial Black', sans-serif; font-weight: 700; }
-#hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; color: #fff; user-select: none; -webkit-user-select: none; }
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 11; color: #fff; user-select: none; -webkit-user-select: none; }
 :where(#hud button, .win-back button, .hatch button) { pointer-events: auto; cursor: pointer; border: 0; background: none; padding: 0; color: inherit; touch-action: manipulation; }
 .win-back *, .hatch * { box-sizing: border-box; font-family: Fredoka, 'Arial Black', sans-serif; font-weight: 700; }
 .ol { -webkit-text-stroke: 0.2em var(--ink); paint-order: stroke fill; }

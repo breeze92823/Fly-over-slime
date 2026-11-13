@@ -222,6 +222,9 @@ export function buildGround(scene) {
     const x1 = side * PLAZA.maxX
     addFixed(RAPIER.ColliderDesc.cuboid(Math.abs(x1 - x0) / 2, 3, 0.5), { x: (x0 + x1) / 2, y: 3, z: PLAZA.minZ - 0.5 })
   }
+  // Invisible wall across the river mouth: walking is never allowed into the slime lane
+  // (flights move the player through setPlayerOverride, so they are not blocked).
+  addFixed(RAPIER.ColliderDesc.cuboid(CHANNEL.halfWidth, 20, 0.5), { x: 0, y: 20, z: PLAZA.minZ - 0.5 })
   const bankTiers = [
     { off: 0, jitter: 0, h: 1.5, base: -7 },
     { off: 6, jitter: 4.5, h: 6, base: -7 },
