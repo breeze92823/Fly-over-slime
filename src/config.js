@@ -348,7 +348,7 @@ export const PLATFORMS = [
 export const REBIRTH = { base: 1000, growth: 2.5 }
 export const rebirthCost = (rebirths) => Math.round(REBIRTH.base * Math.pow(REBIRTH.growth, rebirths))
 // Skip Rebirth (the Rebirth window): rebirth without reaching the level, for Wins.
-export const SKIP_REBIRTH = { base: 400, growth: 3 }
+export const SKIP_REBIRTH = { base: 25000, growth: 5 }
 export const skipRebirthPrice = (rebirths) => Math.round(SKIP_REBIRTH.base * Math.pow(SKIP_REBIRTH.growth, rebirths))
 
 // Level from total Skill: level L -> L+1 costs (a + b L) Skill.
