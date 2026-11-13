@@ -52,7 +52,7 @@ body.touch .fly-btn .key { display: none; }
 .fly-fade.on { opacity: 1; }
 
 /* While flying the lobby HUD steps aside (the bottom bar stays, like the reference). */
-body.flying .hud-left, body.flying .hud-side, body.flying .hud-right, body.flying .hud-stats, body.flying .trainbtn, body.flying .prompt, body.flying .toasts, body.flying .egg-panel { opacity: 0 !important; pointer-events: none !important; transition: opacity 0.25s; }
+body.flying .hud-left .menu-grid, body.flying .hud-side, body.flying .hud-right, body.flying .hud-stats, body.flying .trainbtn, body.flying .prompt, body.flying .toasts, body.flying .egg-panel { opacity: 0 !important; pointer-events: none !important; transition: opacity 0.25s; }
 
 @media (orientation: portrait) and (max-width: 640px) {
   .fly-skip { left: 50%; top: 33%; }

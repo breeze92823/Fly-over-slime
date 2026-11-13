@@ -303,7 +303,10 @@ async function connect() {
     const room = roomId ? await client.joinById(roomId, options) : await client.joinOrCreate('world', options)
     attach(room)
     // The portal's invites and Open Rooms land in this room.
-    updateRoom(relay ? `${relay}~${room.roomId}` : room.roomId)
+    // The plain Colyseus room id: the one Bloxity's room directory lists (api.bloxity.io/v1/games/<slug>/rooms)
+    // and puts in ?roomId= links. (The "<relay>~<room>" form is only for CrazyGames invites.)
+    updateRoom(room.roomId)
+    console.info('[net] joined room', room.roomId, relay ? `(relay ${relay})` : '', 'as', id.userId)
     registerPlayWithFriends()
   } catch (err) {
     console.info('[net] could not reach the server; playing solo', err?.message ?? err)
