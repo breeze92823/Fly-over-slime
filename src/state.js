@@ -9,6 +9,7 @@ import {
   LEVEL,
   LIMITED_PETS,
   LIMITED_SLINGSHOTS,
+  OFFLINE,
   PASSES,
   PET_SLOTS,
   PET_STORAGE,
@@ -108,6 +109,9 @@ export function hydrate(doc) {
   const next = migrate(doc ?? {})
   next.claimedGifts = state.claimedGifts
   Object.assign(state, next)
+  // The server stamps lastSeen when the player really leaves (offline training reads it); never echo it back.
+  if (typeof doc?.lastSeen === 'number') serverSeen = { at: doc.lastSeen, clock: typeof doc.serverTime === 'number' ? doc.serverTime : Date.now() }
+  delete state.lastSeen
   save()
   for (const fn of listeners) fn(state)
 }
@@ -132,6 +136,32 @@ export const setOwner = (id) => {
   } catch {
     /* ignore */
   }
+}
+// --- Offline training: when the player was last here -----------------------------------------
+// Local heartbeat (epoch ms, read once at load so the heartbeat can't overwrite it) and the
+// server's lastSeen once the save is loaded. The smaller gap wins, so a stale copy never pays extra.
+const SEEN_KEY = `${SAVE_KEY}-seen`
+let bootSeen = 0
+try {
+  bootSeen = Number(localStorage.getItem(SEEN_KEY)) || 0
+} catch {
+  /* ignore */
+}
+let serverSeen = null
+export function touchSeen() {
+  try {
+    localStorage.setItem(SEEN_KEY, String(Date.now()))
+  } catch {
+    /* ignore */
+  }
+}
+// ms the player was away before this session (0 = unknown / first visit).
+export function awayMs() {
+  const gaps = []
+  if (bootSeen) gaps.push(Date.now() - bootSeen)
+  if (serverSeen) gaps.push(serverSeen.clock - serverSeen.at)
+  const g = gaps.filter((x) => Number.isFinite(x) && x > 0)
+  return g.length ? Math.min(...g) : 0
 }
 export function resetSave() {
   Object.assign(state, DEFAULT())
@@ -247,6 +277,11 @@ export const rebirthLevel = (r = state.rebirths) => levelFor(rebirthCost(r)).L +
 export const canRebirth = () => levelInfo().level >= rebirthLevel()
 export const rebirthProgress = () => Math.min(1, levelInfo().level / rebirthLevel())
 
+// Skill per second the free offline training pays: the best table you own, at OFFLINE.rate clicks/s.
+export function offlineSkillPerSec() {
+  const mult = Math.max(1, ...PLATFORMS.filter(platformUnlocked).map((p) => p.mult))
+  return skillPerClick(mult) * OFFLINE.rate
+}
 export function addSkill(n) {
   state.skill += n
   state.totalSkill += n

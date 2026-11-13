@@ -9,6 +9,7 @@ import {
   DAILY,
   INDEX_LUCK,
   PLAYTIME,
+  OFFLINE,
   PASSES,
   PLATFORMS,
   SKILL_PACKS,
@@ -55,6 +56,8 @@ import {
   platformUnlocked,
   rebirthMult,
   skillPerClick,
+  awayMs,
+  offlineSkillPerSec,
   slingById,
   state,
   trailById,
@@ -123,6 +126,21 @@ export function createGame({ scene, camera, fx, props, hud }) {
       hud.toast(`${slingById(r.sling).name} unlocked! +${fmtShort(slingById(r.sling).skill)} Skill per click`, '#c98cff')
     }
   }
+  // Free offline training: pay the Skill earned while away (once per session) and open the report window.
+  let offlineReport = null
+  function checkOffline() {
+    if (offlineReport) return
+    const away = awayMs()
+    if (away < OFFLINE.min * 1000) return
+    const secs = Math.min(away / 1000, OFFLINE.cap)
+    const skill = Math.floor(secs * offlineSkillPerSec())
+    if (skill <= 0) return
+    addSkill(skill)
+    offlineReport = { away: away / 1000, secs, skill, capped: away / 1000 > OFFLINE.cap }
+    changed()
+    hud.update()
+    hud.openWindow('offline')
+  }
   // The Settings window: sound, music, effects, HUD and pets visibility.
   function applySettings() {
     const st = state.settings
@@ -138,6 +156,8 @@ export function createGame({ scene, camera, fx, props, hud }) {
   }
   const actions = {
     sessionMinutes,
+    offlineReport: () => offlineReport,
+    closeWindow: () => hud.closeWindow(),
     toast: (text, color) => hud.toast(text, color),
     windowOpened: (on) => {
       windowOpen = on
@@ -903,5 +923,5 @@ export function createGame({ scene, camera, fx, props, hud }) {
   updateNameTag()
   bloxity.subscribeAuth?.(() => updateNameTag())
 
-  return { actions, update, afterAnimator, setAvatar, isFlying: () => fl.active(), isTraining: () => trainingActive, setBoards, resync, flight: fl, eggs }
+  return { actions, checkOffline, update, afterAnimator, setAvatar, isFlying: () => fl.active(), isTraining: () => trainingActive, setBoards, resync, flight: fl, eggs }
 }

@@ -233,6 +233,7 @@ function attach(room) {
     net.hydrated = true
     lastSaved = ''
     loadedId = sentId
+    emit('noProgress')
     if (!isGuestId(sentId)) {
       // A new account. This tab's progress becomes its first save, unless that progress belongs to a
       // different account (never carry one player's cache into another's save).

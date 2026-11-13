@@ -16,7 +16,7 @@ import { buildProps } from './props.js'
 import { createHud } from './hud.js'
 import { createGame } from './game.js'
 import { installAudio, setAdMuted, setMusicLevel, setVolume } from './audio/index.js'
-import { friends, onChange, state } from './state.js'
+import { friends, onChange, state, touchSeen } from './state.js'
 import { buildDefaultCharacter, loadBaseCharacter } from './avatar/character.js'
 import { applyProportions, attachEquippedAccessories } from './avatar/loader.js'
 import { disposeAnimator, makeAnimator } from './avatar/animator.js'
@@ -152,7 +152,30 @@ function currentPose() {
     training: game.isTraining(),
   }
 }
-onNet('hydrated', () => game.resync()) // the server's save replaced the local one
+// Free offline training: pay + show the report once the save is known (server load, new account, or
+// a timeout when there is no server).
+let offlineDone = false
+const checkOffline = () => {
+  if (offlineDone) return
+  offlineDone = true
+  touchSeen()
+  game.checkOffline()
+}
+onNet('hydrated', () => (game.resync(), checkOffline()))
+onNet('noProgress', checkOffline)
+// No server answer: run on the local stamp, but never while a connected save is still loading
+// (hydrate would overwrite the Skill just paid).
+let offlineTries = 0
+const offlineFallback = () => {
+  if (offlineDone) return
+  if (net.connected && !net.hydrated && ++offlineTries < 5) return setTimeout(offlineFallback, 3000)
+  checkOffline()
+}
+setTimeout(offlineFallback, 5000)
+setInterval(() => offlineDone && touchSeen(), 15000)
+document.addEventListener('visibilitychange', () => document.hidden && offlineDone && touchSeen())
+window.addEventListener('pagehide', () => offlineDone && touchSeen())
+// (the old line was: onNet('hydrated', () => game.resync())) // the server's save replaced the local one
 onNet('leaderboard', (msg) => game.setBoards(msg))
 // Invites: the Friend Boost grows when a friend joins through our invite (net.js, backend invite.ts).
 onNet('invite', () => {

@@ -501,7 +501,33 @@ export function makeWindows({ actions, petThumb, eggThumb, slingThumb }) {
     api.below.appendChild(luck)
   }
 
+  // --- Offline training report (shown once after logging back in) -----------------------------
+  function hms(sec) {
+    sec = Math.floor(sec)
+    const d = Math.floor(sec / 86400)
+    const hh = Math.floor((sec % 86400) / 3600)
+    const mm = Math.floor((sec % 3600) / 60)
+    return d ? `${d}d ${hh}h` : hh ? `${hh}h ${mm}m` : `${Math.max(1, mm)}m`
+  }
+  function renderOffline(api) {
+    const r = actions.offlineReport?.()
+    const box = h('div', 'rw-panel off')
+    if (!r) {
+      box.innerHTML = '<div class="rw-empty o">No offline training yet. Come back after a break!</div>'
+      api.body.appendChild(box)
+      return
+    }
+    box.innerHTML = `<div class="off-t o">Free Training while you were away!</div>
+      <div class="off-time o">Away for ${hms(r.away)}</div>
+      ${img(iconURL('bolt', 192), 'off-img')}
+      <div class="off-gain o">+${fmt(r.skill)} Skill</div>
+      <div class="off-sub o">${r.capped ? `Trained for the max ${hms(r.secs)}. Log in more often to earn more!` : `Trained for ${hms(r.secs)} on your best table`}</div>`
+    box.appendChild(rbtn('Awesome!', 'lime', () => actions.closeWindow?.(), { cls: 'off-btn' }))
+    api.body.appendChild(box)
+  }
+
   return {
+    offline: { title: 'Welcome Back!', size: 'sm', render: renderOffline },
     daily: { title: 'Daily Rewards', size: 'md', render: renderDaily },
     playtime: { title: 'Playtime Rewards', size: 'md', render: renderPlaytime },
     trails: { title: 'Trails', size: 'lg', render: renderTrails },

@@ -344,6 +344,10 @@ export const PLATFORMS = [
   { id: 'gold', mult: 50, price: 750000, style: 'gold', x: 40.5, z: 10.5, step: 2 },
 ]
 
+// Free offline training: while the player is away they keep training on their best table at
+// `rate` clicks/s for at most `cap` s (a gap under `min` s pays nothing).
+export const OFFLINE = { rate: 0.3, cap: 8 * 3600, min: 60 }
+
 // Rebirth: needs Skill, resets Skill, multiplier x(rebirths + 1).
 export const REBIRTH = { base: 1000, growth: 2.5 }
 export const rebirthCost = (rebirths) => Math.round(REBIRTH.base * Math.pow(REBIRTH.growth, rebirths))
