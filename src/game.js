@@ -138,6 +138,7 @@ export function createGame({ scene, camera, fx, props, hud }) {
   }
   const actions = {
     sessionMinutes,
+    toast: (text, color) => hud.toast(text, color),
     windowOpened: (on) => {
       windowOpen = on
       bloxity.adsScreen(on ? 'panel' : 'gameplay')
@@ -393,7 +394,11 @@ export function createGame({ scene, camera, fx, props, hud }) {
   }
   const training = createTraining({ scene, camera, fx, player, tables: props.tables, onBounce })
   const slingPos = new Vector3()
+  let lastTrainAt = -Infinity
   function train(bounce = false) {
+    const now = performance.now() / 1000
+    if (now - lastTrainAt < TRAIN.cooldown) return
+    lastTrainAt = now
     const mult = currentTable && platformUnlocked(currentTable.data) ? currentTable.data.mult : 1
     const gain = skillPerClick(mult)
     addSkill(gain)

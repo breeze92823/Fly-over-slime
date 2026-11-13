@@ -369,6 +369,49 @@ export async function resolveServerEndpoint(userId) {
   return { endpoint, relayRoomId: roomId }
 }
 
+// --- Invites (Legion.SDK.social; windows.js Invite Friends) -------------------------------------
+// The inviter's account id the page was opened with (an invite link's `ref`), '' = none.
+export function launchRef() {
+  try {
+    return new URLSearchParams(location.search).get('ref') || ''
+  } catch {
+    return ''
+  }
+}
+// The signed-in account id ('' for a guest): tags our invite link so the server credits us.
+export function accountId() {
+  const u = authState.user
+  return String(u?.id || u?.userId || u?._id || '')
+}
+export const canInvite = () => typeof sdk()?.social?.getFriends === 'function'
+// The signed-in player's Bloxity friends [{ _id, username, displayName?, pfp?, presence? }], [] for
+// guests or without the SDK.
+export async function getFriends() {
+  try {
+    const list = await sdk()?.social?.getFriends?.()
+    return Array.isArray(list) ? list.filter((f) => f && typeof f._id === 'string') : []
+  } catch {
+    return []
+  }
+}
+// A Bloxity invite to friend `userId` into the room updateRoom() last reported. True when sent.
+export async function inviteFriend(userId) {
+  try {
+    return (await sdk()?.social?.inviteFriend?.(userId)) === true
+  } catch {
+    return false
+  }
+}
+// A shareable link that opens the game in our room, tagged `ref` = our account. '' without the SDK.
+export function inviteLink() {
+  try {
+    const ref = accountId()
+    return sdk()?.social?.getInviteFriendsLink?.({ gameSlug: GAME_SLUG, ...(ref && { ref }) }) || ''
+  } catch {
+    return ''
+  }
+}
+
 // The ?roomId= the page was opened with: the game page's Open Rooms Join button (a bare Colyseus
 // room id) or a friend invite (what updateRoom() reported: "<relayRoomId>~<colyseusRoomId>").
 export function launchRoomId() {
@@ -471,10 +514,18 @@ export function registerPlayWithFriends() {
   }
 }
 
-// Someone else entered the room (the portal's join feed / chat).
+// Netcode joins, so the portal knows who shares our room (its ESC menu's "In this lobby" list and the
+// friend-join toasts): playerInRoom = already here when we joined, playerJoined = arrived after us.
 export function playerJoined(name) {
   try {
     if (name) sdk()?.game?.playerJoined?.(name)
+  } catch {
+    // Ignore.
+  }
+}
+export function playerInRoom(name) {
+  try {
+    if (name) sdk()?.game?.playerInRoom?.(name)
   } catch {
     // Ignore.
   }

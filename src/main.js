@@ -1,5 +1,5 @@
 import { ACESFilmicToneMapping, Clock, Group, PCFSoftShadowMap, PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer } from 'three'
-import { CAMERA, graphicsPreset, RENDER } from './config.js'
+import { CAMERA, FRIEND_BOOST, graphicsPreset, RENDER } from './config.js'
 import * as bloxity from './bloxity.js'
 import { install as installInput, onKey } from './input.js'
 import { installTouch } from './touch.js'
@@ -16,7 +16,7 @@ import { buildProps } from './props.js'
 import { createHud } from './hud.js'
 import { createGame } from './game.js'
 import { installAudio, setAdMuted, setMusicLevel, setVolume } from './audio/index.js'
-import { onChange, state } from './state.js'
+import { friends, onChange, state } from './state.js'
 import { buildDefaultCharacter, loadBaseCharacter } from './avatar/character.js'
 import { applyProportions, attachEquippedAccessories } from './avatar/loader.js'
 import { disposeAnimator, makeAnimator } from './avatar/animator.js'
@@ -154,6 +154,13 @@ function currentPose() {
 }
 onNet('hydrated', () => game.resync()) // the server's save replaced the local one
 onNet('leaderboard', (msg) => game.setBoards(msg))
+// Invites: the Friend Boost grows when a friend joins through our invite (net.js, backend invite.ts).
+onNet('invite', () => {
+  hud.update()
+  if (hud.openId === 'invite') hud.refreshWindow()
+})
+onNet('friendJoined', (m) => hud.toast(`${m?.name || 'A friend'} joined from your invite! +${Math.round(FRIEND_BOOST.per * 100)}% Skill for good`, '#7dff7d'))
+onNet('invitedBy', (m) => hud.toast(`Welcome! ${m?.name || 'A friend'} invited you`, '#7dff7d'))
 initNet({ pose: currentPose })
 
 async function loadAvatar() {
@@ -284,5 +291,5 @@ if (import.meta.env.DEV) {
     resetPlayer({ x, y, z }, facing)
     syncYawToPlayer()
   }
-  window.__game = { player, scene, renderer, camera, postfx, bodies: bodyCount, toggleMode, teleport, state, game, hud, net, remotes }
+  window.__game = { player, scene, renderer, camera, postfx, bodies: bodyCount, toggleMode, teleport, state, friends, game, hud, net, remotes }
 }

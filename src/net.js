@@ -22,6 +22,7 @@ import {
   registerPlayWithFriends,
   getProportions,
   getSkinTextureUrl,
+  launchRef,
   launchRoomId,
   locateRoom,
   onAvatarChanged,
@@ -30,7 +31,7 @@ import {
   subscribeAuth,
   updateRoom,
 } from './bloxity.js'
-import { getOwner, hydrate, onChange, resetSave, setOwner, snapshot, state, titleById, titleOwned } from './state.js'
+import { friends, getOwner, hydrate, onChange, resetSave, setOwner, snapshot, state, titleById, titleOwned } from './state.js'
 
 export const net = {
   room: null,
@@ -191,6 +192,15 @@ export function sendEmote(id) {
 let clockOffset = 0
 export const serverNow = () => Date.now() + clockOffset
 
+// A direct Bloxity invite we sent to friend `friendId` (the server credits them when they join).
+export function sendInvited(friendId) {
+  send('invited', { friendId })
+}
+// Re-read the friends-joined count (a friend may have been credited in another room).
+export function refreshInvites() {
+  send('inviteRefresh', {})
+}
+
 export function send(type, payload) {
   try {
     net.room?.send(type, payload)
@@ -240,6 +250,16 @@ function attach(room) {
     net.hydrated = false
     console.warn('[net] the server could not read the saved progress; saving is off for this session')
   })
+  // Invites (backend invite.ts): how many friends joined through our invites (the Friend Boost), a
+  // friend who just joined, and who invited us.
+  room.onMessage('invite', (m) => {
+    friends.joined = Math.max(0, Number(m?.joined) || 0)
+    friends.sent = Math.max(0, Number(m?.sent) || 0)
+    friends.guest = !!m?.guest
+    emit('invite', m)
+  })
+  room.onMessage('friendJoined', (m) => emit('friendJoined', m))
+  room.onMessage('invitedBy', (m) => emit('invitedBy', m))
   room.onMessage('leaderboard', (msg) => {
     net.leaderboard = msg ?? null
     emit('leaderboard', net.leaderboard)
@@ -279,7 +299,7 @@ async function connect() {
     const id = identity()
     sentId = id.userId
     const { client, roomId, relay } = await open(id)
-    const options = { ...id, pfp: getPfp(), avatar: (sentAvatar = avatarJson()), loadout: loadout(), pose: getPoseOnJoin?.() }
+    const options = { ...id, ref: launchRef(), pfp: getPfp(), avatar: (sentAvatar = avatarJson()), loadout: loadout(), pose: getPoseOnJoin?.() }
     const room = roomId ? await client.joinById(roomId, options) : await client.joinOrCreate('world', options)
     attach(room)
     // The portal's invites and Open Rooms land in this room.

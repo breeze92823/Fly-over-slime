@@ -1,11 +1,15 @@
 import './windows.css'
-import { BOOSTS, DAILY, EGGS, GAME_SETTINGS, INDEX_LUCK, PET_TIERS, PLAYTIME, RARITY_COLORS, STAND_PETS, LIMITED_PETS, TITLES, TRAILS, skipRebirthPrice } from './config.js'
+import { BOOSTS, DAILY, EGGS, FRIEND_BOOST, GAME_SETTINGS, INDEX_LUCK, PET_TIERS, PLAYTIME, RARITY_COLORS, STAND_PETS, LIMITED_PETS, TITLES, TRAILS, skipRebirthPrice } from './config.js'
 import { iconURL, studURL, trailArtURL } from './icons.js'
 import { fmtShort } from './props.js'
+import * as bloxity from './bloxity.js'
+import { refreshInvites, sendInvited } from './net.js'
 import {
   ALL_PETS,
   ALL_SLINGSHOTS,
   dailyClaimable,
+  friendBoost,
+  friends,
   indexKey,
   indexLuck,
   levelInfo,
@@ -349,6 +353,77 @@ export function makeWindows({ actions, petThumb, eggThumb, slingThumb }) {
     api.body.appendChild(lay)
   }
 
+  // --- Invite Friends ------------------------------------------------------------------------
+  // Opened from the Friend Boost line at the bottom left of the HUD. A friend who JOINS through our link
+  // or our direct Bloxity invite gives +FRIEND_BOOST.per Skill gain for good (the server credits each
+  // account once); Boxity draws its own invite button too, which works the same way.
+  let friendList = null // the last Bloxity friends list
+  let friendsAt = 0
+  const invitedNow = new Set() // friend ids invited this session
+  function renderInvite(api) {
+    const per = Math.round(FRIEND_BOOST.per * 100)
+    const got = Math.min(friends.joined, FRIEND_BOOST.max)
+    const info = h('div', 'inv-info')
+    info.innerHTML = `<div class="inv-big o">Friend Boost: +${Math.round(friendBoost() * 100)}%</div><div class="inv-sub o">Every friend who joins the game from your invite gives you +${per}% Skill gain, forever!</div><div class="inv-bar"><div style="width:${(got / FRIEND_BOOST.max) * 100}%"></div><span class="o">${got} / ${FRIEND_BOOST.max} friends</span></div>`
+    api.body.appendChild(info)
+    const note = (text) => api.body.appendChild(h('div', 'inv-note o', text))
+    if (!bloxity.canInvite()) return note('Invites work when you play on Bloxity.')
+    if (!bloxity.authState.user) return note('Sign in to Bloxity (top-left menu) to invite friends and earn the boost.')
+
+    const copy = rbtn('Copy Invite Link', 'lime', async () => {
+      const url = bloxity.inviteLink()
+      if (!url) return actions.toast?.('Could not make an invite link. Try again!', '#ff6a6a')
+      try {
+        await navigator.clipboard.writeText(url)
+        actions.toast?.('Invite link copied! Send it to a friend', '#7dff7d')
+      } catch {
+        window.prompt('Copy your invite link:', url)
+      }
+    }, { cls: 'inv-copy' })
+    api.body.appendChild(copy)
+
+    api.body.appendChild(h('div', 'inv-h o', 'Your Bloxity friends'))
+    const list = h('div', 'inv-list')
+    list.dataset.keep = 'y'
+    api.body.appendChild(list)
+    if (!friendList || Date.now() - friendsAt > 60000) {
+      list.appendChild(h('div', 'inv-note o', 'Loading friends...'))
+      refreshInvites() // a friend may have been credited in another room since the load
+      bloxity.getFriends().then((f) => {
+        friendList = f
+        friendsAt = Date.now()
+        if (document.body.classList.contains('win-open')) api.refresh()
+      })
+      return
+    }
+    if (!friendList.length) return list.appendChild(h('div', 'inv-note o', 'No Bloxity friends yet: share your invite link instead!'))
+    const order = { 'in-game': 0, online: 1, away: 2, offline: 3 }
+    const sorted = [...friendList].sort((a, b) => (order[a.presence?.status] ?? 4) - (order[b.presence?.status] ?? 4))
+    for (const f of sorted.slice(0, 40)) {
+      const name = f.displayName || f.username || 'Friend'
+      const status = f.presence?.status ?? 'offline'
+      const row = h('div', `inv-row st-${status}`)
+      const nm = h('span', 'inv-name o')
+      nm.textContent = name // friend names are user text
+      row.append(nm, h('span', 'inv-st o', status))
+      const done = invitedNow.has(f._id)
+      const b = rbtn(done ? 'Invited' : 'Invite', done ? 'grey' : 'lime', async () => {
+        b.disabled = true
+        const ok = await bloxity.inviteFriend(f._id)
+        if (!ok) {
+          b.disabled = false
+          return actions.toast?.(`Could not invite ${name}. Try again!`, '#ff6a6a')
+        }
+        invitedNow.add(f._id)
+        sendInvited(f._id)
+        actions.toast?.(`Invite sent to ${name}!`, '#7dff7d')
+        api.refresh()
+      }, { disabled: done, cls: 'inv-btn' })
+      row.appendChild(b)
+      list.appendChild(row)
+    }
+  }
+
   // --- Settings ------------------------------------------------------------------------------
   function renderSettings(api) {
     const list = h('div', 'set-list')
@@ -432,6 +507,7 @@ export function makeWindows({ actions, petThumb, eggThumb, slingThumb }) {
     trails: { title: 'Trails', size: 'lg', render: renderTrails },
     inventory: { title: 'Inventory', size: 'lg', side: true, render: renderInventory },
     settings: { title: 'Settings', size: 'sm', render: renderSettings },
+    invite: { title: 'Invite Friends', size: 'md', render: renderInvite },
     rebirth: { title: 'Rebirth', size: 'md', render: renderRebirth },
     index: { title: 'Index', size: 'lg', side: true, render: renderIndex },
   }

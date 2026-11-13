@@ -3,6 +3,7 @@ import {
   DAILY,
   EGGS,
   EXTRA_SLOT_PRICES,
+  FRIEND_BOOST,
   GAME_SETTINGS,
   INDEX_LUCK,
   LEVEL,
@@ -215,9 +216,13 @@ export function platformUnlocked(p) {
 }
 export const platformById = (id) => PLATFORMS.find((p) => p.id === id)
 // Skill per training click (platformMult = the table you stand on).
+// Friends who joined through this player's invites (server-written: net.js `invite`, never saved by the
+// client). Each adds FRIEND_BOOST.per to the Skill gain for good.
+export const friends = { joined: 0, sent: 0, guest: false }
+export const friendBoost = () => Math.min(friends.joined, FRIEND_BOOST.max) * FRIEND_BOOST.per
 export function skillPerClick(platformMult = 1) {
   const sl = slingById(state.equippedSling) ?? SLINGSHOTS[0]
-  return sl.skill * platformMult * rebirthMult() * petBoost() * (hasPass('skill2x') ? 2 : 1) * (1 + titleBonus('skill')) * boostMult('skill')
+  return sl.skill * platformMult * rebirthMult() * petBoost() * (hasPass('skill2x') ? 2 : 1) * (1 + titleBonus('skill')) * (1 + friendBoost()) * boostMult('skill')
 }
 export const nextRebirthCost = () => rebirthCost(state.rebirths)
 

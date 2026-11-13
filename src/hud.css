@@ -40,7 +40,8 @@
 .stat img { width: calc(var(--b) * 0.82); height: calc(var(--b) * 0.82); }
 .stat.rb span { font-size: calc(var(--b) * 0.5); color: #6fd4ff; }
 .stat.wins span { font-size: calc(var(--b) * 0.66); color: #ffd23a; }
-.friend { font-size: calc(var(--b) * 0.24); display: flex; align-items: center; gap: 0.8vmin; }
+.friend { font-size: calc(var(--b) * 0.24); display: flex; align-items: center; gap: 0.8vmin; pointer-events: auto; cursor: pointer; min-height: 44px; }
+.friend:active { transform: scale(0.96); }
 .friend img { width: calc(var(--b) * 0.26); }
 
 /* --- Bottom centre: skill, level bar, skill packs --- */

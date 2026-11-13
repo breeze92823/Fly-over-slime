@@ -199,10 +199,17 @@ export function createRemotePlayers({ scene, onAvatar = () => {} }) {
       let r = remotes.get(id)
       if (!r) {
         r = add(id, p)
-        if (synced) bloxity.playerJoined(p.username) // someone arrived after us
+        r.late = synced // true = arrived after us, false = already here when we joined
       }
       r.state = p
       r.uid = p.uid
+      // Tell the portal who shares our room (its ESC menu list + friend-join toasts), once per player,
+      // as soon as they have a name.
+      if (!r.reported && p.username) {
+        r.reported = true
+        if (r.late) bloxity.playerJoined(p.username)
+        else bloxity.playerInRoom(p.username)
+      }
       const title = p.title ? titleById(p.title) : null
       const name = p.username || 'Player'
       const key = `${title?.id ?? ''}|${name}`
@@ -217,7 +224,7 @@ export function createRemotePlayers({ scene, onAvatar = () => {} }) {
       syncPets(r, p.pets)
       syncEmote(r, p.emote, p.emoteAt)
     })
-    if (players) synced = true
+    if (players?.size) synced = true // our own entry is there: the first state arrived
   }
 
   function update(dt, t) {

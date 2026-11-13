@@ -647,6 +647,9 @@ export const PLAYTIME = [
   { at: 105, egg: 'rare' },
 ]
 export const CHEST = { cooldown: 10 * 60, wins: 25 } // s; Wins x (rebirths + 1)
+// Friend Boost: every friend who joins the game from this player's invite (link or direct Bloxity invite;
+// the server credits each account once, backend invite.ts) adds +per Skill gain for good, up to max friends.
+export const FRIEND_BOOST = { per: 0.1, max: 10 }
 
 // Limited items that never sit on a pad or an egg (daily rewards).
 export const LIMITED_SLINGSHOTS = [{ id: 'galaxy', name: 'Galaxy Cannon', skill: 2500, style: 'galaxy' }]
@@ -710,6 +713,7 @@ export const WORLD2_SKILL = 600e6
 // Training (game.js train(), feedback in training.js + audio/training.js).
 export const TRAIN = {
   interval: 0.16, // s between training clicks while held
+  cooldown: 1, // s: minimum time between Skill gains (clicks and bounces)
   streakGap: 0.45, // s: a click within this of the last one continues the streak
   streakEvery: 25, // a "N Streak!" milestone every this many clicks in a row
   popLife: 0.9, // s a "+N" number stays up

@@ -17,6 +17,7 @@ import {
   rebirthMult,
   rebirthProgress,
   state,
+  friendBoost,
 } from './state.js'
 
 // All 2D UI: the always-on HUD (menu buttons, toggles, Skill/Level bar, Wins,
@@ -92,6 +93,8 @@ export function createHud(actions) {
   const rbStat = h('div', 'stat rb', `${ico('rebirth')}<span class="ol">0</span>`)
   const winStat = h('div', 'stat wins', `${ico('trophy')}<span class="ol">0</span>`)
   const friend = h('div', 'friend ol-thin', `Friend Boost: 0% ${ico('plus', 48)}`)
+  friend.title = 'Invite friends for +Skill'
+  friend.addEventListener('click', () => openWindow('invite'))
   stats.append(rbStat, winStat, friend)
   root.appendChild(stats)
 
@@ -333,6 +336,12 @@ export function createHud(actions) {
     bar.lastChild.textContent = `Level ${fmt(lv.level)}`
     rbStat.lastChild.textContent = fmt(state.rebirths)
     winStat.lastChild.textContent = fmtShort(state.wins)
+    // Friend Boost (bottom left): +% Skill from friends who joined through our invites; tap to invite more.
+    const fb = Math.round(friendBoost() * 100)
+    if (friend.dataset.fb !== String(fb)) {
+      friend.dataset.fb = String(fb)
+      friend.innerHTML = `Friend Boost: +${fb}% ${ico('plus', 48)}`
+    }
     pct.textContent = `${Math.floor(rebirthProgress() * 100)}%`
     toggles.autoRebirth.classList.toggle('on', state.autoRebirth)
     toggles.autoFly.classList.toggle('on', state.autoFly)
